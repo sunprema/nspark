@@ -83,6 +83,8 @@ defmodule NsparkWeb do
       use Gettext, backend: NsparkWeb.Gettext
 
       # HTML escaping functionality
+      import LiveSvelte
+
       import Phoenix.HTML
       # Core UI components
       import NsparkWeb.CoreComponents

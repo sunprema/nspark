@@ -1,5 +1,6 @@
 defmodule NsparkWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :nspark
+  import PhoenixVite.Plug
 
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
@@ -14,6 +15,8 @@ defmodule NsparkWeb.Endpoint do
   socket "/live", Phoenix.LiveView.Socket,
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
+
+  plug :favicon, dev_server: {PhoenixVite.Components, :has_vite_watcher?, [__MODULE__]}
 
   # Serve at "/" the static files from "priv/static" directory.
   #
@@ -45,6 +48,15 @@ defmodule NsparkWeb.Endpoint do
     plug Phoenix.CodeReloader
     plug AshPhoenix.Plug.CheckCodegenStatus
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :nspark
+  end
+
+  if Code.ensure_loaded?(LiveAgent) do
+    plug LiveAgent,
+      allow_remote_access: false,
+      drive_default: true,
+      open_default: true,
+      oban_tools: true,
+      pubsub_tools: Nspark.PubSub
   end
 
   plug Phoenix.LiveDashboard.RequestLogger,

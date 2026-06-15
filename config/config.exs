@@ -7,6 +7,16 @@
 # General application configuration
 import Config
 
+config :live_svelte, ssr: true
+
+config :phoenix_vite, PhoenixVite.Npm,
+  assets: [args: [], cd: Path.expand("..", __DIR__)],
+  vite: [
+    args: ~w(exec -- vite),
+    cd: Path.expand("../assets", __DIR__),
+    env: %{"MIX_BUILD_PATH" => Mix.Project.build_path()}
+  ]
+
 config :ash_oban, pro?: false
 
 config :nspark, Oban,
@@ -81,7 +91,7 @@ config :spark,
 config :nspark,
   ecto_repos: [Nspark.Repo],
   generators: [timestamp_type: :utc_datetime],
-  ash_domains: [Nspark.Accounts],
+  ash_domains: [Nspark.Accounts, Nspark.Projects, Nspark.Architecture, Nspark.Registry],
   ash_authentication: [return_error_on_invalid_magic_link_token?: true]
 
 # Configure the endpoint
@@ -108,28 +118,6 @@ config :phoenix_live_view,
 # For production it's recommended to configure a different adapter
 # at the `config/runtime.exs`.
 config :nspark, Nspark.Mailer, adapter: Swoosh.Adapters.Local
-
-# Configure esbuild (the version is required)
-config :esbuild,
-  version: "0.25.4",
-  nspark: [
-    args:
-      ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
-    cd: Path.expand("../assets", __DIR__),
-    env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
-  ]
-
-# Configure tailwind (the version is required)
-config :tailwind,
-  version: "4.3.0",
-  nspark: [
-    args: ~w(
-      --input=assets/css/app.css
-      --output=priv/static/assets/css/app.css
-    ),
-    cd: Path.expand("..", __DIR__),
-    env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
-  ]
 
 # Configure Elixir's Logger
 config :logger, :default_formatter,

@@ -292,4 +292,14 @@ defmodule Nspark.Accounts.User do
   identities do
     identity :unique_email, [:email]
   end
+
+  relationships do
+    has_many :memberships, Nspark.Accounts.Membership
+
+    many_to_many :organizations, Nspark.Accounts.Organization do
+      through Nspark.Accounts.Membership
+      source_attribute_on_join_resource :user_id
+      destination_attribute_on_join_resource :organization_id
+    end
+  end
 end

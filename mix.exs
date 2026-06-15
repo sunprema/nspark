@@ -12,7 +12,8 @@ defmodule Nspark.MixProject do
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
       listeners: [Phoenix.CodeReloader],
-      consolidate_protocols: Mix.env() != :dev
+      consolidate_protocols: Mix.env() != :dev,
+      usage_rules: usage_rules()
     ]
   end
 
@@ -32,6 +33,40 @@ defmodule Nspark.MixProject do
     ]
   end
 
+  defp usage_rules do
+    # Example for those using claude.
+    [
+      file: "CLAUDE.md",
+      # rules to include directly in CLAUDE.md
+      # use a regex to match multiple deps, or atoms/strings for specific ones
+      usage_rules: [:usage_rules, :ash, ~r/^ash_/],
+      # If your CLAUDE.md is getting too big, link instead of inlining:
+      usage_rules: [:usage_rules, :ash, {~r/^ash_/, link: :markdown}],
+      # or use skills
+      skills: [
+        location: ".claude/skills",
+        # Pull in pre-built skills shipped directly by packages
+        package_skills: [:ash, ~r/^ash_/],
+        # build skills that combine multiple usage rules
+        build: [
+          "ash-framework": [
+            # The description tells people how to use this skill.
+            description:
+              "Use this skill working with Ash Framework or any of its extensions. Always consult this when making any domain changes, features or fixes.",
+            # Include all Ash dependencies
+            usage_rules: [:ash, ~r/^ash_/]
+          ],
+          "phoenix-framework": [
+            description:
+              "Use this skill working with Phoenix Framework. Consult this when working with the web layer, controllers, views, liveviews etc.",
+            # Include all Phoenix dependencies
+            usage_rules: [:phoenix, ~r/^phoenix_/]
+          ]
+        ]
+      ]
+    ]
+  end
+
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
@@ -41,6 +76,7 @@ defmodule Nspark.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      {:live_svelte, "~> 0.18"},
       {:bcrypt_elixir, "~> 3.0"},
       {:picosat_elixir, "~> 0.2"},
       {:sourceror, "~> 1.8", only: [:dev, :test]},
@@ -73,8 +109,6 @@ defmodule Nspark.MixProject do
       {:phoenix_live_view, "~> 1.2.0"},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:phoenix_live_dashboard, "~> 0.8.3"},
-      {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
-      {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
       {:heroicons,
        github: "tailwindlabs/heroicons",
        tag: "v2.2.0",
@@ -89,7 +123,13 @@ defmodule Nspark.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.5"},
+      {:live_agent,
+       if(Mix.env() == :dev and File.dir?("/Volumes/x/projects/elixir_libs/live_agent"),
+         do: [path: "/Volumes/x/projects/elixir_libs/live_agent", override: true, only: :dev],
+         else: [github: "sunprema/live_agent", branch: "main", only: :dev]
+       )},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 
@@ -105,12 +145,13 @@ defmodule Nspark.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ash.setup --quiet", "test"],
-      "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
-      "assets.build": ["compile", "tailwind nspark", "esbuild nspark"],
+      "assets.setup": ["phoenix_vite.npm assets install"],
+      "assets.build": [
+        "phoenix_vite.npm vite build --manifest --emptyOutDir true",
+        "phoenix_vite.npm vite build --ssrManifest --emptyOutDir false --ssr js/server.js --outDir ../priv/svelte"
+      ],
       "assets.deploy": [
-        "tailwind nspark --minify",
-        "esbuild nspark --minify",
-        "phx.digest"
+        "assets.build"
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
