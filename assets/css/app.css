@@ -1490,6 +1490,177 @@
 .version-restore-btn:hover {
   background: oklch(0.94 0.01 250);
 }
+.version-diff-btn {
+  font: 500 9px/1 'IBM Plex Mono', monospace;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border: 1px solid oklch(0.82 0.02 250);
+  background: oklch(0.99 0.004 245);
+  color: oklch(0.42 0.03 255);
+  cursor: pointer;
+}
+.version-diff-btn:hover {
+  background: oklch(0.95 0.02 255);
+}
+
+/* ───────────────────── Version diff badges + viewer (Phase 4) ───────────────── */
+.vbadge {
+  font: 600 8px/1 'IBM Plex Mono', monospace;
+  letter-spacing: 0.06em;
+  padding: 3px 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+.vbadge--breaking {
+  color: oklch(0.45 0.17 25);
+  background: oklch(0.95 0.04 25);
+  border-color: oklch(0.85 0.08 25);
+}
+.vbadge--compatible {
+  color: oklch(0.45 0.1 75);
+  background: oklch(0.96 0.05 85);
+  border-color: oklch(0.86 0.07 80);
+}
+.vbadge--cosmetic {
+  color: oklch(0.5 0.02 255);
+  background: oklch(0.95 0.006 250);
+  border-color: oklch(0.88 0.01 250);
+}
+.vbadge--initial {
+  color: oklch(0.45 0.1 255);
+  background: oklch(0.95 0.03 255);
+  border-color: oklch(0.86 0.05 255);
+}
+
+.vdiff-compare {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+.vdiff-compare-label {
+  font: 500 9px/1 'IBM Plex Mono', monospace;
+  letter-spacing: 0.06em;
+  color: oklch(0.55 0.03 255);
+}
+.vdiff-select {
+  width: auto;
+  padding: 4px 8px;
+}
+.vdiff-reasons {
+  margin: 12px 0;
+  padding: 10px 12px;
+  background: oklch(0.97 0.02 25);
+  border-left: 2px solid oklch(0.7 0.12 25);
+}
+.vdiff-reason {
+  font: 500 11px/1.5 'IBM Plex Mono', monospace;
+  color: oklch(0.4 0.1 25);
+}
+.vdiff-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 12px 0;
+}
+.vdiff-col {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.vdiff-col .dlg-field-label {
+  flex-basis: 100%;
+}
+.vdiff-none {
+  font: 400 11px/1 'IBM Plex Mono', monospace;
+  color: oklch(0.62 0.02 255);
+  font-style: italic;
+}
+.vchip {
+  font: 500 10px/1 'IBM Plex Mono', monospace;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.vchip--add {
+  color: oklch(0.42 0.12 150);
+  background: oklch(0.95 0.05 150);
+  border-color: oklch(0.85 0.08 150);
+}
+.vchip--del {
+  color: oklch(0.45 0.15 25);
+  background: oklch(0.95 0.04 25);
+  border-color: oklch(0.86 0.07 25);
+}
+.vchip--rename {
+  color: oklch(0.45 0.1 75);
+  background: oklch(0.96 0.05 85);
+  border-color: oklch(0.86 0.07 80);
+}
+.vdiff-provider {
+  font: 500 11px/1 'IBM Plex Mono', monospace;
+  color: oklch(0.45 0.05 255);
+  margin: 6px 0 12px;
+}
+.vdiff-node {
+  margin-bottom: 8px;
+  border: 1px solid oklch(0.92 0.008 250);
+}
+.vdiff-node-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: oklch(0.985 0.004 245);
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+.vdiff-node-head:disabled {
+  cursor: default;
+}
+.vdiff-node-head:not(:disabled):hover {
+  background: oklch(0.95 0.01 250);
+}
+.vnode-tag {
+  font: 600 8px/1 'IBM Plex Mono', monospace;
+  letter-spacing: 0.06em;
+  padding: 3px 5px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.vnode-tag--added { color: oklch(0.42 0.12 150); background: oklch(0.95 0.05 150); }
+.vnode-tag--removed { color: oklch(0.45 0.15 25); background: oklch(0.95 0.04 25); }
+.vnode-tag--retyped { color: oklch(0.45 0.1 75); background: oklch(0.96 0.05 85); }
+.vnode-tag--content { color: oklch(0.45 0.08 255); background: oklch(0.95 0.03 255); }
+.vdiff-node-label {
+  font: 500 11px/1 'IBM Plex Mono', monospace;
+  color: oklch(0.35 0.03 255);
+}
+.vdiff-retype {
+  font: 400 10px/1 'IBM Plex Mono', monospace;
+  color: oklch(0.55 0.05 75);
+}
+.vdiff-lines {
+  padding: 6px 8px;
+  background: oklch(0.99 0.002 245);
+  border-top: 1px solid oklch(0.93 0.008 250);
+}
+.vline {
+  font: 400 11px/1.5 'IBM Plex Mono', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.vline--add { color: oklch(0.42 0.12 150); }
+.vline--del { color: oklch(0.48 0.13 25); }
+.vdiff-error {
+  font: 500 11px/1.4 'IBM Plex Mono', monospace;
+  color: oklch(0.5 0.17 25);
+  margin-top: 8px;
+}
 
 /* ─────────────────────────── Auth Pages ─────────────────────────────────────
    Sign-in, Register, Reset — styled to match the blueprint aesthetic. */

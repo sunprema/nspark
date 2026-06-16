@@ -3,7 +3,7 @@
 Source: `LIVE_PROMPT.md` brainstorm (the "prompt tree + diffing" idea, salvaged
 into the pull-based product) + product-positioning **P1 — variable/version
 contract**.
-Status: **Phases 1–3 complete** — contract, diff engine, and publish-time gate shipped; Phases 4–5 pending.
+Status: **Phases 1–4 complete** — contract, diff engine, publish-time gate, and studio diff UI shipped. Phase 5 (NL summary) intentionally scoped out.
 Owner: —
 Last updated: 2026-06-16
 
@@ -181,15 +181,26 @@ Wire the engine into `Architecture.publish_graph/5`.
 
 Surface the diff where governance reviews happen.
 
-- [ ] Version-history panel: each version row shows a class badge
-      (`⚠ breaking` / `~ compatible` / `· cosmetic`) read straight from the
-      stored `diff_summary` — no recompute.
-- [ ] "Compare" affordance between any two selected versions → a side panel
-      showing the contract delta (added/removed variables & outputs) and the
-      per-node change list with the line-level content diff.
-- [ ] Breaking rows link to the named fields/nodes (jump-to-node where the
-      version is the current draft's ancestor).
-- [ ] Verify live in the studio against a real two-version graph.
+- [x] Version-history panel: each row shows a class badge
+      (`⚠ breaking` / `~ compatible` / `· cosmetic` / `★ initial`) read straight
+      from the stored `diff_summary` via `version_badge_class/label` — no recompute.
+- [x] Per-row "Diff" button opens a viewer modal showing that version's stored
+      `diff_summary` (vs predecessor), with a **"Compare against" version select**
+      that recomputes `VersionDiff.diff/2` on demand for arbitrary A↔B. Renders
+      reasons, the variable/output contract delta (add/remove/rename chips), the
+      provider delta, and the per-node change list with the line-level content
+      diff. `normalize_diff/1` unifies stored (string) and recomputed (atom)
+      shapes so the template renders both.
+- [x] Node-change rows are click-to-select when the node still exists in the
+      current draft (`node_in_draft?/2` → `select_node`), disabled otherwise.
+- [x] **Completes the Phase 3 gate UX:** a breaking publish opens an
+      acknowledge + changelog modal (`@breaking_publish`); submitting re-publishes
+      with `acknowledge_breaking: true` + the changelog. A blank changelog is
+      rejected inline (`{:changelog_required, …}`). Replaces the interim flash.
+- [x] Verified live in the studio against a seeded two-version graph (v1 initial,
+      v2 breaking: +`{company}` +`{account_id}`). Badges, the diff modal (reasons
+      / variable chips / line diff), and the compare dropdown all render. Full
+      suite green (62 tests); `mix compile` clean.
 
 ## Phase 5 — NL change summary (scoped out, documented)
 
