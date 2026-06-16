@@ -6,6 +6,10 @@ Newtonian Spark is a visual architecture platform that transforms agent behavior
 
 Just as engineers use IDEs to organize source code, Newtonian Spark gives teams a structured environment to design, validate, compile, and deploy the logic that drives AI agents.
 
+![Newtonian Spark studio — node palette and variable explorer, graph canvas, live diagnostics and compiler](docs/screenshots/studio-full.png)
+
+*The studio: a node palette and auto-discovered variable explorer (left), the graph canvas (center), and live diagnostics + the Live Compiler (right).*
+
 ---
 
 ## What It Is
@@ -26,6 +30,8 @@ Newtonian Spark treats agent behavior as architecture:
 ### Visual Graph Studio
 
 Design agent behavior on an interactive canvas. Each node represents a discrete piece of logic; edges define how they compose.
+
+![Graph canvas — typed blueprint nodes, conditional diamonds, inline variable highlighting, and minimap](docs/screenshots/studio-canvas.png)
 
 **Node types:**
 
