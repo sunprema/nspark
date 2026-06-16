@@ -3,11 +3,13 @@
   import { SvelteFlow, Background, Controls, MiniMap } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
   import BlueprintNode from "./BlueprintNode.svelte";
+  import ConditionalNode from "./ConditionalNode.svelte";
+  import AgentNode from "./AgentNode.svelte";
   import FlowBridge from "./FlowBridge.svelte";
 
   let { nodes: initialNodes = [], edges: initialEdges = [], live } = $props();
 
-  const nodeTypes = { blueprint: BlueprintNode };
+  const nodeTypes = { blueprint: BlueprintNode, conditional: ConditionalNode, agent: AgentNode };
 
   let nodes = $state.raw($state.snapshot(initialNodes));
   let edges = $state.raw($state.snapshot(initialEdges));
@@ -105,6 +107,7 @@
     live?.pushEvent("connect_nodes", {
       source: connection.source,
       target: connection.target,
+      sourceHandle: connection.sourceHandle ?? null,
     });
   }
 

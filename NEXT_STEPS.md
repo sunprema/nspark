@@ -1,6 +1,6 @@
 # Newtonian Spark — Next Steps
 
-Status snapshot and prioritized backlog. Reflects the codebase as of 2026-06-15.
+Status snapshot and prioritized backlog. Reflects the codebase as of 2026-06-16.
 
 ## Where we are
 
@@ -108,9 +108,45 @@ Implement the three-tier model end to end (HLD §4).
 
 ---
 
+---
+
+## Priority 5 — Multi-agent composition (see `MULTI_AGENT.md`)
+
+### Phase 1 — Foundation ✓ (complete)
+
+- [x] `:agent` added to `NodeType` enum (stored as `:text` in Postgres — no migration needed)
+- [x] `AgentNode.svelte` — blue/indigo canvas component; shows agent name, version badge, input count, output var, on_error indicator
+- [x] `ConditionalNode.svelte` — diamond SVG, `yes`/`no` handles, amber theme
+- [x] Studio: Agent palette entry + drag-to-place; `update_agent_metadata` handler; inspector panel (sub-agent graph selector, output var, on-error toggle)
+- [x] Edge metadata field (`edge.metadata :map`) — stores `branch`/`label` for conditional routing
+- [x] Compiler: agent nodes compile to `[AGENT: output_var]...[\AGENT]` orchestration directives in an ORCHESTRATION section
+- [x] Diagnostics: agent `output_var` treated as a produced variable; warns on missing `source_graph_id` or empty `output_var`
+- [x] `Nspark.Orchestrator` — parse directives, sequential sub-agent dispatch, `on_error: continue/fail` policy, variable rendering
+- [x] Deploy run endpoint wired through Orchestrator; returns `prompt` + `sub_agent_calls` metadata
+- [x] `serialize_snapshot` includes node `metadata` (minus position) so agent directives reconstruct from published snapshots
+
+### Phase 2 — Parallel + Conditional (in progress)
+
+- [x] Parallel dispatch in Orchestrator — dependency-wave grouping; each wave dispatched via `Task.async` + `Task.await` with per-directive timeout
+- [x] Timeout per Agent node (`metadata.timeout_ms`); inspector field; orchestrator enforces per-call timeout
+- [x] Orchestration metadata surfaced in the deploy run response (`sub_agent_calls` with per-call duration + status)
+- [x] Conditional node routing: diamond → Agent node branches based on runtime variable value
+- [x] Studio: visualize parallel fan-out (multiple Agent nodes at same depth get a "parallel" indicator)
+
+### Phase 3 — Depth + Observability
+
+- [ ] Hierarchical orchestration (depth > 1 — sub-agents that are themselves orchestrators)
+- [ ] Depth limit enforcement at compile time (configurable max, default 3)
+- [ ] Execution trace: per-call logs surfaced in a future AgentOps panel
+- [ ] Sub-agent output type checking against the referenced graph's Output node schema
+- [ ] Cross-graph variable inspector in studio
+
+---
+
 ## Known cleanups / notes
 
 - `mdex` was added; a brand-new dep + NIF requires a **dev-server restart** (cannot hot-load).
 - Dev sanity-check rows exist in the dev DB from earlier verification; `mix ash.reset` to clean.
 - Demo data: `mix run priv/repo/demo_seed.exs` (idempotent) creates the `nspark-demo` org + "Agent Planner" graph.
 - `CodeEditor.svelte` keeps the autofixer's advisory `bind:this`/`$effect` notes — intentional (CodeMirror mount + Svelte Flow writable-state bridge can't use `$derived`).
+- `handle_event/3` grouping warning in `studio_live.ex` — pre-existing, clauses are logically grouped by concern not alphabetically; suppressing is low priority.

@@ -119,6 +119,7 @@ defmodule Nspark.Architecture do
     %{
       "nodes" =>
         Enum.map(nodes, fn n ->
+          meta = n.metadata || %{}
           %{
             "id" => n.id,
             "type" => to_string(n.type),
@@ -126,7 +127,8 @@ defmodule Nspark.Architecture do
             "content" => n.content,
             "is_muted" => n.is_muted,
             "source_asset_id" => n.source_asset_id,
-            "position" => (n.metadata || %{})["position"] || %{"x" => 0, "y" => 0}
+            "position" => meta["position"] || %{"x" => 0, "y" => 0},
+            "metadata" => Map.drop(meta, ["position"])
           }
         end),
       "edges" =>

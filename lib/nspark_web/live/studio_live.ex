@@ -24,7 +24,8 @@ defmodule NsparkWeb.StudioLive do
     {:memory, 330},
     {:tool, 50},
     {:evaluation, 130},
-    {:output, 300}
+    {:output, 300},
+    {:agent, 255}
   ]
   @palette_types Enum.map(@node_palette, fn {t, _} -> t end)
 
@@ -38,6 +39,7 @@ defmodule NsparkWeb.StudioLive do
      |> assign(:nodes, [])
      |> assign(:flow_nodes, [])
      |> assign(:flow_edges, [])
+     |> assign(:edges, [])
      |> assign(:edge_count, 0)
      |> assign(:variables, [])
      |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0, cost_estimate: 0.0, provider: :anthropic})
@@ -162,11 +164,19 @@ defmodule NsparkWeb.StudioLive do
 
   # ── connect → create edge ────────────────────────────────────────────────────
 
-  def handle_event("connect_nodes", %{"source" => s, "target" => t}, socket)
+  def handle_event("connect_nodes", %{"source" => s, "target" => t} = params, socket)
       when is_binary(s) and is_binary(t) and s != t do
+    branch = Map.get(params, "sourceHandle")
+    metadata = if branch, do: %{"branch" => branch, "label" => branch}, else: %{}
+
     case Ash.create(
            Edge,
-           %{graph_id: socket.assigns.graph.id, source_node_id: s, target_node_id: t},
+           %{
+             graph_id: socket.assigns.graph.id,
+             source_node_id: s,
+             target_node_id: t,
+             metadata: metadata
+           },
            ash_opts(socket)
          ) do
       {:ok, _edge} -> {:noreply, socket |> refresh() |> mark_dirty()}
@@ -250,6 +260,47 @@ defmodule NsparkWeb.StudioLive do
       node ->
         _ = Ash.update!(node, %{is_muted: !node.is_muted}, ash_opts(socket))
         {:noreply, socket |> refresh() |> mark_dirty()}
+    end
+  end
+
+  def handle_event("update_agent_metadata", params, socket) do
+    case socket.assigns.selected do
+      %{type: :agent} = node ->
+        meta = node.metadata || %{}
+
+        meta =
+          meta
+          |> then(fn m ->
+            case Map.get(params, "source_graph_id") do
+              nil -> m
+              "" -> Map.put(m, "source_graph_id", nil)
+              id -> Map.put(m, "source_graph_id", id)
+            end
+          end)
+          |> then(fn m ->
+            case Map.get(params, "output_var") do
+              nil -> m
+              v -> Map.put(m, "output_var", String.trim(v))
+            end
+          end)
+          |> then(fn m ->
+            case Map.get(params, "on_error") do
+              e when e in ["fail", "continue"] -> Map.put(m, "on_error", e)
+              _ -> m
+            end
+          end)
+          |> then(fn m ->
+            case Integer.parse(Map.get(params, "timeout_ms", "")) do
+              {ms, ""} when ms >= 500 -> Map.put(m, "timeout_ms", ms)
+              _ -> m
+            end
+          end)
+
+        _ = Ash.update!(node, %{metadata: meta}, ash_opts(socket))
+        {:noreply, socket |> refresh() |> mark_dirty()}
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -597,13 +648,28 @@ defmodule NsparkWeb.StudioLive do
   end
 
   defp create_node(type_atom, pos, socket) do
+    base_meta = %{"position" => pos}
+
+    meta =
+      if type_atom == :agent do
+        Map.merge(base_meta, %{
+          "output_var" => "",
+          "input_mapping" => %{},
+          "on_error" => "fail",
+          "source_graph_id" => nil,
+          "source_deployment_id" => nil
+        })
+      else
+        base_meta
+      end
+
     Ash.create!(
       Node,
       %{
         type: type_atom,
         label: "New #{type_atom |> to_string() |> String.capitalize()}",
         graph_id: socket.assigns.graph.id,
-        metadata: %{"position" => pos}
+        metadata: meta
       },
       ash_opts(socket)
     )
@@ -627,6 +693,7 @@ defmodule NsparkWeb.StudioLive do
       socket
       |> assign(:graph, nil)
       |> assign(:nodes, [])
+      |> assign(:edges, [])
       |> assign(:flow_nodes, [])
       |> assign(:flow_edges, [])
       |> assign(:edge_count, 0)
@@ -661,6 +728,7 @@ defmodule NsparkWeb.StudioLive do
     diagnostics = Nspark.Diagnostics.run(nodes, edges)
     node_diagnostics = build_node_diagnostics(diagnostics)
     var_node_ids = var_node_ids_for(socket.assigns[:selected_variable], nodes)
+    parallel_ids = parallel_agent_ids(nodes, edges)
 
     {var_producers, var_consumers} =
       case socket.assigns[:selected_variable] do
@@ -670,7 +738,8 @@ defmodule NsparkWeb.StudioLive do
 
     socket
     |> assign(:nodes, nodes)
-    |> assign(:flow_nodes, to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order))
+    |> assign(:edges, edges)
+    |> assign(:flow_nodes, to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order, parallel_ids))
     |> assign(:flow_edges, to_flow_edges(edges))
     |> assign(:edge_count, length(edges))
     |> assign(:variables, variables_in(nodes))
@@ -895,10 +964,12 @@ defmodule NsparkWeb.StudioLive do
 
   defp apply_var_highlight(socket) do
     nodes = socket.assigns.nodes
+    edges = socket.assigns.edges
     node_diag = build_node_diagnostics(socket.assigns.diagnostics)
     var_node_ids = var_node_ids_for(socket.assigns.selected_variable, nodes)
-    node_order = Nspark.Compiler.node_order(nodes)
-    assign(socket, :flow_nodes, to_flow_nodes(nodes, node_diag, var_node_ids, node_order))
+    node_order = Nspark.Compiler.node_order(nodes, edges)
+    parallel_ids = parallel_agent_ids(nodes, edges)
+    assign(socket, :flow_nodes, to_flow_nodes(nodes, node_diag, var_node_ids, node_order, parallel_ids))
   end
 
   defp clear_var_selection(socket) do
@@ -915,7 +986,94 @@ defmodule NsparkWeb.StudioLive do
 
   # ── flow serialization ──────────────────────────────────────────────────────
 
-  defp to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order) do
+  # Returns the set of agent node IDs that share a dependency wave with at least
+  # one other agent node (i.e., will be dispatched in parallel by the orchestrator).
+  defp parallel_agent_ids(nodes, edges) do
+    agent_nodes = Enum.filter(nodes, &(&1.type == :agent))
+
+    if length(agent_nodes) < 2 do
+      MapSet.new()
+    else
+      output_var_to_id =
+        Map.new(agent_nodes, fn n ->
+          {(n.metadata || %{}) |> Map.get("output_var", ""), n.id}
+        end)
+
+      dep_map =
+        Map.new(agent_nodes, fn n ->
+          input_vars =
+            (n.metadata || %{}) |> Map.get("input_mapping", %{}) |> Map.values()
+
+          deps =
+            Enum.flat_map(input_vars, fn var ->
+              case Map.get(output_var_to_id, var) do
+                nil -> []
+                dep_id -> [dep_id]
+              end
+            end)
+            |> MapSet.new()
+
+          {n.id, deps}
+        end)
+
+      # Also account for edges between agent nodes (sequential dependencies).
+      agent_ids = MapSet.new(agent_nodes, & &1.id)
+
+      dep_map =
+        Enum.reduce(edges, dep_map, fn e, acc ->
+          src = e.source_node_id
+          tgt = e.target_node_id
+
+          if MapSet.member?(agent_ids, src) and MapSet.member?(agent_ids, tgt) do
+            Map.update(acc, tgt, MapSet.new([src]), &MapSet.put(&1, src))
+          else
+            acc
+          end
+        end)
+
+      wave_map = compute_agent_wave_map(agent_nodes, dep_map)
+
+      wave_map
+      |> Enum.group_by(fn {_id, wave} -> wave end, fn {id, _} -> id end)
+      |> Enum.flat_map(fn {_wave, ids} ->
+        if length(ids) > 1, do: ids, else: []
+      end)
+      |> MapSet.new()
+    end
+  end
+
+  defp compute_agent_wave_map(agent_nodes, dep_map) do
+    Enum.reduce(agent_nodes, %{}, fn n, acc ->
+      wave = compute_agent_wave(n.id, dep_map, acc, MapSet.new())
+      Map.put(acc, n.id, wave)
+    end)
+  end
+
+  defp compute_agent_wave(node_id, dep_map, wave_map, visited) do
+    if MapSet.member?(visited, node_id) do
+      0
+    else
+      deps = Map.get(dep_map, node_id, MapSet.new())
+
+      if MapSet.size(deps) == 0 do
+        0
+      else
+        visited = MapSet.put(visited, node_id)
+
+        deps
+        |> Enum.map(fn dep_id ->
+          case Map.get(wave_map, dep_id) do
+            nil -> compute_agent_wave(dep_id, dep_map, wave_map, visited)
+            w -> w
+          end
+        end)
+        |> Enum.max()
+        |> Kernel.+(1)
+      end
+    end
+  end
+
+  defp to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order, parallel_ids) do
     nodes
     |> Enum.with_index()
     |> Enum.map(fn {n, i} ->
@@ -926,9 +1084,15 @@ defmodule NsparkWeb.StudioLive do
           nil -> nil
         end
 
+      meta = n.metadata || %{}
+
       %{
         id: n.id,
-        type: "blueprint",
+        type: cond do
+          n.type == :conditional -> "conditional"
+          n.type == :agent -> "agent"
+          true -> "blueprint"
+        end,
         position: position_for(n, i),
         data: %{
           label: n.label,
@@ -938,7 +1102,14 @@ defmodule NsparkWeb.StudioLive do
           diagnostic: diag,
           var_role: Map.get(var_node_ids, n.id),
           compile_order: Map.get(node_order, n.id),
-          linked: not is_nil(n.source_asset_id)
+          linked: not is_nil(n.source_asset_id),
+          agent_name: Map.get(meta, "agent_name") || n.label,
+          output_var: Map.get(meta, "output_var"),
+          input_mapping: Map.get(meta, "input_mapping", %{}),
+          on_error: Map.get(meta, "on_error", "fail"),
+          deployment_version: Map.get(meta, "deployment_version"),
+          timeout_ms: Map.get(meta, "timeout_ms", 10_000),
+          parallel: n.type == :agent and MapSet.member?(parallel_ids, n.id)
         }
       }
     end)
@@ -949,7 +1120,14 @@ defmodule NsparkWeb.StudioLive do
 
   defp to_flow_edges(edges) do
     Enum.map(edges, fn e ->
-      %{id: e.id, source: e.source_node_id, target: e.target_node_id, type: "smoothstep"}
+      %{
+        id: e.id,
+        source: e.source_node_id,
+        target: e.target_node_id,
+        sourceHandle: Map.get(e.metadata, "branch"),
+        label: Map.get(e.metadata, "label"),
+        type: "smoothstep"
+      }
     end)
   end
 
@@ -1164,6 +1342,7 @@ defmodule NsparkWeb.StudioLive do
             <%= if @graph do %>
               <.svelte
                 name="GraphCanvas"
+                id="studio-graph-canvas"
                 props={%{nodes: @flow_nodes, edges: @flow_edges}}
                 socket={@socket}
                 ssr={false}
@@ -1201,44 +1380,111 @@ defmodule NsparkWeb.StudioLive do
                   />
                 </.form>
 
-                <div class="insp-field-label">INSTRUCTION · MARKDOWN</div>
-                <.svelte
-                  name="CodeEditor"
-                  props={%{
-                    node_id: @selected.id,
-                    content: @selected.content || "",
-                    variables: @variables
-                  }}
-                  socket={@socket}
-                  ssr={false}
-                />
-
-                <div class="insp-toggle">
-                  <span>Include in compile</span>
-                  <button
-                    type="button"
-                    phx-click="toggle_mute"
-                    class={["insp-pill", @selected.is_muted && "insp-pill--off"]}
+                <%= if @selected.type == :agent do %>
+                  <%!-- Agent node wiring --%>
+                  <% agent_meta = @selected.metadata || %{} %>
+                  <.form
+                    for={%{}}
+                    id={"agent-form-#{@selected.id}"}
+                    phx-change="update_agent_metadata"
                   >
-                    {if @selected.is_muted, do: "MUTED", else: "ON"}
-                  </button>
-                </div>
+                    <div class="insp-field-label">SUB-AGENT GRAPH</div>
+                    <select name="source_graph_id" class="insp-agent-select">
+                      <option value="">— select graph —</option>
+                      <%= for g <- @all_graphs, g.id != (@graph && @graph.id) do %>
+                        <option value={g.id} selected={Map.get(agent_meta, "source_graph_id") == g.id}>
+                          {g.name}
+                        </option>
+                      <% end %>
+                    </select>
 
-                <%!-- Registry link info + actions --%>
-                <% linked_asset = @selected.source_asset_id && Enum.find(@registry_items, &(&1.id == @selected.source_asset_id)) %>
-                <%= if linked_asset do %>
-                  <div class="insp-linked">
-                    <span class="insp-linked-badge">{registry_type_label(linked_asset.asset_type)}</span>
-                    <span class="insp-linked-name">{linked_asset.name}</span>
-                    <button type="button" phx-click="detach_node" class="insp-detach-btn">
-                      Detach
+                    <div class="insp-field-label">OUTPUT VARIABLE</div>
+                    <input
+                      type="text"
+                      name="output_var"
+                      value={Map.get(agent_meta, "output_var", "")}
+                      phx-debounce="500"
+                      class="insp-agent-input"
+                      placeholder="e.g. research_result"
+                    />
+                    <div class="insp-agent-hint">Downstream nodes reference this as &#123;output_var&#125;</div>
+
+                    <div class="insp-field-label">ON ERROR</div>
+                    <div class="insp-on-error">
+                      <label class={["insp-radio-label", Map.get(agent_meta, "on_error", "fail") == "fail" && "insp-radio-label--active"]}>
+                        <input type="radio" name="on_error" value="fail" checked={Map.get(agent_meta, "on_error", "fail") == "fail"} />
+                        Fail
+                      </label>
+                      <label class={["insp-radio-label", Map.get(agent_meta, "on_error", "fail") == "continue" && "insp-radio-label--active"]}>
+                        <input type="radio" name="on_error" value="continue" checked={Map.get(agent_meta, "on_error", "fail") == "continue"} />
+                        Continue
+                      </label>
+                    </div>
+
+                    <div class="insp-field-label">TIMEOUT (ms)</div>
+                    <input
+                      type="number"
+                      name="timeout_ms"
+                      value={Map.get(agent_meta, "timeout_ms", 10000)}
+                      min="500"
+                      max="120000"
+                      step="500"
+                      phx-debounce="800"
+                      class="insp-agent-input"
+                    />
+                  </.form>
+
+                  <div class="insp-toggle">
+                    <span>Include in compile</span>
+                    <button
+                      type="button"
+                      phx-click="toggle_mute"
+                      class={["insp-pill", @selected.is_muted && "insp-pill--off"]}
+                    >
+                      {if @selected.is_muted, do: "MUTED", else: "ON"}
                     </button>
                   </div>
-                <% end %>
-                <%= if @selected.type == :skill && is_nil(@selected.source_asset_id) do %>
-                  <button type="button" phx-click="convert_to_skill" class="insp-convert-btn">
-                    → Save as Skill
-                  </button>
+                <% else %>
+                  <div class="insp-field-label">INSTRUCTION · MARKDOWN</div>
+                  <.svelte
+                    name="CodeEditor"
+                    id="studio-code-editor"
+                    props={%{
+                      node_id: @selected.id,
+                      content: @selected.content || "",
+                      variables: @variables
+                    }}
+                    socket={@socket}
+                    ssr={false}
+                  />
+
+                  <div class="insp-toggle">
+                    <span>Include in compile</span>
+                    <button
+                      type="button"
+                      phx-click="toggle_mute"
+                      class={["insp-pill", @selected.is_muted && "insp-pill--off"]}
+                    >
+                      {if @selected.is_muted, do: "MUTED", else: "ON"}
+                    </button>
+                  </div>
+
+                  <%!-- Registry link info + actions --%>
+                  <% linked_asset = @selected.source_asset_id && Enum.find(@registry_items, &(&1.id == @selected.source_asset_id)) %>
+                  <%= if linked_asset do %>
+                    <div class="insp-linked">
+                      <span class="insp-linked-badge">{registry_type_label(linked_asset.asset_type)}</span>
+                      <span class="insp-linked-name">{linked_asset.name}</span>
+                      <button type="button" phx-click="detach_node" class="insp-detach-btn">
+                        Detach
+                      </button>
+                    </div>
+                  <% end %>
+                  <%= if @selected.type == :skill && is_nil(@selected.source_asset_id) do %>
+                    <button type="button" phx-click="convert_to_skill" class="insp-convert-btn">
+                      → Save as Skill
+                    </button>
+                  <% end %>
                 <% end %>
 
                 <button

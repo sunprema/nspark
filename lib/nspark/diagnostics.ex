@@ -35,6 +35,7 @@ defmodule Nspark.Diagnostics do
     |> check_multiple_outputs(active)
     |> check_undefined_variables(active)
     |> check_unused_variables(active)
+    |> check_agent_nodes(active)
     |> Enum.reverse()
   end
 
@@ -137,7 +138,7 @@ defmodule Nspark.Diagnostics do
   end
 
   @provider_types [:context, :memory]
-  @consumer_types [:persona, :constraint, :skill, :tool, :evaluation, :conditional, :output]
+  @consumer_types [:persona, :constraint, :skill, :tool, :evaluation, :conditional, :output, :agent]
 
   defp check_empty_output(diags, nodes) do
     empty =
@@ -192,8 +193,12 @@ defmodule Nspark.Diagnostics do
   defp check_undefined_variables(diags, nodes) do
     providers = Enum.filter(nodes, &(node_type(&1) in @provider_types))
     consumers = Enum.filter(nodes, &(node_type(&1) in @consumer_types))
+    agent_nodes = Enum.filter(nodes, &(node_type(&1) == :agent))
 
-    provided = MapSet.new(vars_in(providers))
+    provided =
+      vars_in(providers)
+      |> Kernel.++(agent_output_vars(agent_nodes))
+      |> MapSet.new()
 
     undefined =
       consumers
@@ -204,7 +209,7 @@ defmodule Nspark.Diagnostics do
         %{
           level: :warning,
           code: :undefined_variable,
-          message: "{#{var}} is used but not defined in any Context or Memory node.",
+          message: "{#{var}} is used but not defined in any Context, Memory, or Agent output.",
           node_ids: Enum.uniq(ids)
         }
       end)
@@ -239,6 +244,29 @@ defmodule Nspark.Diagnostics do
     unused ++ diags
   end
 
+  defp check_agent_nodes(diags, nodes) do
+    agent_nodes = Enum.filter(nodes, &(node_type(&1) == :agent))
+
+    Enum.reduce(agent_nodes, diags, fn n, acc ->
+      meta = node_metadata(n) || %{}
+      acc
+      |> then(fn a ->
+        if Map.get(meta, "source_graph_id") in [nil, ""] do
+          [%{level: :warning, code: :agent_no_graph, message: "Agent node \"#{node_label(n)}\" has no sub-agent graph selected.", node_ids: [node_id(n)]} | a]
+        else
+          a
+        end
+      end)
+      |> then(fn a ->
+        if Map.get(meta, "output_var") in [nil, ""] do
+          [%{level: :warning, code: :agent_no_output_var, message: "Agent node \"#{node_label(n)}\" has no output variable set.", node_ids: [node_id(n)]} | a]
+        else
+          a
+        end
+      end)
+    end)
+  end
+
   # ── variable extraction ───────────────────────────────────────────────────────
 
   defp vars_in(nodes), do: Enum.flat_map(nodes, &vars_in_node/1)
@@ -254,6 +282,23 @@ defmodule Nspark.Diagnostics do
   defp node_content(%{content: c}), do: c
   defp node_content(%{"content" => c}), do: c
   defp node_content(_), do: nil
+
+  defp node_metadata(%{metadata: m}), do: m
+  defp node_metadata(%{"metadata" => m}), do: m
+  defp node_metadata(_), do: nil
+
+  defp node_label(%{label: l}), do: l
+  defp node_label(%{"label" => l}), do: l
+  defp node_label(_), do: "?"
+
+  defp agent_output_vars(agent_nodes) do
+    Enum.flat_map(agent_nodes, fn n ->
+      case node_metadata(n) do
+        %{"output_var" => v} when is_binary(v) and v != "" -> [v]
+        _ -> []
+      end
+    end)
+  end
 
   # ── cycle detection via Kahn's algorithm ─────────────────────────────────────
   # Nodes absent from the topological sort are in cycles.

@@ -11,6 +11,7 @@ defmodule Nspark.Compiler do
   """
 
   @order [
+    {:agent, "ORCHESTRATION"},
     {:persona, "MISSION"},
     {:constraint, "OPERATIONAL RULES"},
     {:context, "CONTEXT"},
@@ -52,13 +53,17 @@ defmodule Nspark.Compiler do
   def compile(nodes, edges \\ [], opts \\ []) do
     provider = Keyword.get(opts, :provider, :anthropic)
     active = Enum.reject(nodes, & &1.is_muted)
+    cond_contexts = build_conditional_contexts(active, edges)
 
     raw =
       for {type, heading} <- @order,
           group = Enum.filter(active, &(node_type(&1) == type)),
           group != [] do
         sorted = topo_sort_group(group, edges)
-        body = sorted |> Enum.map_join("\n\n", &node_body/1)
+        body = sorted |> Enum.map_join("\n\n", fn n ->
+          when_expr = if node_type(n) == :agent, do: Map.get(cond_contexts, node_id(n)), else: nil
+          node_body(n, when_expr)
+        end)
         "# #{heading}\n\n#{body}"
       end
       |> Enum.join("\n\n")
@@ -179,6 +184,30 @@ defmodule Nspark.Compiler do
   defp edge_tgt(%{target_node_id: id}), do: id
   defp edge_tgt(%{"target_node_id" => id}), do: id
 
+  # ── node_body/2 (context-aware: threads when_expr for agent nodes) ────────────
+
+  defp node_body(%{type: :agent, metadata: meta, label: label}, when_expr) when is_map(meta) do
+    agent_directive(label, meta, when_expr)
+  end
+
+  defp node_body(%{"type" => type, "metadata" => meta, "label" => label}, when_expr)
+       when (type == "agent" or type == :agent) and is_map(meta) do
+    agent_directive(label, meta, when_expr)
+  end
+
+  defp node_body(n, _when_expr), do: node_body(n)
+
+  # ── node_body/1 (fallback: no conditional context) ────────────────────────────
+
+  defp node_body(%{type: :agent, metadata: meta, label: label}) when is_map(meta) do
+    agent_directive(label, meta, nil)
+  end
+
+  defp node_body(%{"type" => type, "metadata" => meta, "label" => label})
+       when (type == "agent" or type == :agent) and is_map(meta) do
+    agent_directive(label, meta, nil)
+  end
+
   defp node_body(%{content: c, label: l}) when is_binary(c) do
     case String.trim(c) do
       "" -> "_#{l}_"
@@ -198,4 +227,67 @@ defmodule Nspark.Compiler do
   defp node_body(%{"label" => l}), do: "_#{l}_"
 
   defp node_body(_), do: "_?_"
+
+  # ── agent directive assembly ──────────────────────────────────────────────────
+
+  defp agent_directive(label, meta, when_expr) do
+    output_var = Map.get(meta, "output_var") || "result"
+    deployment_id = Map.get(meta, "source_deployment_id") || "latest"
+    on_error = Map.get(meta, "on_error", "fail")
+    timeout_ms = Map.get(meta, "timeout_ms") || 10_000
+    input_mapping = Map.get(meta, "input_mapping") || %{}
+
+    inputs_text =
+      if map_size(input_mapping) > 0 do
+        Enum.map_join(input_mapping, "\n", fn {param, var} -> "  #{param}: {#{var}}" end)
+      else
+        "  (none)"
+      end
+
+    when_line = if when_expr, do: "\nwhen: #{when_expr}", else: ""
+
+    "[AGENT: #{output_var}]\ncall: #{label} (deployment: #{deployment_id})\ninputs:\n#{inputs_text}\noutput: {#{output_var}}\non_error: #{on_error}\ntimeout: #{timeout_ms}#{when_line}\n[/AGENT]"
+  end
+
+  # ── conditional context: map agent node IDs to their when-expression ──────────
+
+  defp build_conditional_contexts(nodes, edges) do
+    node_map = Map.new(nodes, &{node_id(&1), &1})
+
+    edges
+    |> Enum.flat_map(fn e ->
+      src_id = edge_src(e)
+      tgt_id = edge_tgt(e)
+      branch = edge_branch(e)
+
+      with %{} = src <- Map.get(node_map, src_id),
+           :conditional <- node_type(src),
+           %{} = tgt <- Map.get(node_map, tgt_id),
+           :agent <- node_type(tgt),
+           expr when is_binary(expr) and expr != "" <- node_content_field(src),
+           b when b in ["yes", "no"] <- branch do
+        [{tgt_id, build_when_expr(expr, b)}]
+      else
+        _ -> []
+      end
+    end)
+    |> Map.new()
+  end
+
+  defp build_when_expr(expr, "yes"), do: expr
+  defp build_when_expr(expr, "no") do
+    cond do
+      String.contains?(expr, " == ") -> String.replace(expr, " == ", " != ", global: false)
+      String.contains?(expr, " != ") -> String.replace(expr, " != ", " == ", global: false)
+      true -> "!#{expr}"
+    end
+  end
+
+  defp edge_branch(%{metadata: %{"branch" => b}}), do: b
+  defp edge_branch(%{"metadata" => %{"branch" => b}}), do: b
+  defp edge_branch(_), do: nil
+
+  defp node_content_field(%{content: c}), do: c
+  defp node_content_field(%{"content" => c}), do: c
+  defp node_content_field(_), do: nil
 end

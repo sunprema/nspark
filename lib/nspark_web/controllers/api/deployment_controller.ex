@@ -1,8 +1,15 @@
 defmodule NsparkWeb.Api.DeploymentController do
   @moduledoc """
-  Runtime API for executing a pinned deployment with variable injection
-  (HLD §8 run endpoint). Accepts a bearer token via the :api pipeline.
-  The deployment's tenant is resolved from the authenticated user's memberships.
+  Runtime API for executing a pinned deployment with variable injection and
+  multi-agent orchestration (HLD §8 run endpoint). Accepts a bearer token
+  via the :api pipeline. The deployment's tenant is resolved from the
+  authenticated user's memberships.
+
+  Flow:
+  1. Load deployment → graph_version → graph_snapshot
+  2. Compile snapshot into a prompt artifact (may contain [AGENT: ...] directives)
+  3. Run Nspark.Orchestrator: dispatch sub-agents, inject outputs, render final prompt
+  4. Return resolved prompt + orchestration metadata
   """
   use NsparkWeb, :controller
 
@@ -26,22 +33,32 @@ defmodule NsparkWeb.Api.DeploymentController do
             conn |> put_status(422) |> json(%{error: "deployment is not active"})
           else
             snapshot = dep.graph_version.graph_snapshot
-            nodes = snapshot_to_nodes(snapshot["nodes"] || [])
-            nodes_injected = inject_variables(nodes, variables)
-            compiled = Nspark.Compiler.compile(nodes_injected)
+            nodes = snapshot["nodes"] || []
+            edges = snapshot["edges"] || []
 
-            json(conn, %{
-              deployment_id: dep.id,
-              environment: dep.environment,
-              endpoint_slug: dep.endpoint_slug,
-              deployed_version: dep.deployed_version,
-              compiled: %{
-                markdown: compiled.markdown,
-                token_estimate: compiled.token_estimate,
-                included: compiled.included,
-                excluded: compiled.excluded
-              }
-            })
+            compiled = Nspark.Compiler.compile(nodes, edges)
+
+            case Nspark.Orchestrator.run(compiled.markdown, variables, tenant: org_id) do
+              {:ok, %{prompt: prompt, sub_agent_calls: calls}} ->
+                json(conn, %{
+                  deployment_id: dep.id,
+                  environment: dep.environment,
+                  endpoint_slug: dep.endpoint_slug,
+                  deployed_version: dep.deployed_version,
+                  prompt: prompt,
+                  sub_agent_calls: calls,
+                  stats: %{
+                    token_estimate: compiled.token_estimate,
+                    included: compiled.included,
+                    excluded: compiled.excluded
+                  }
+                })
+
+              {:error, %{reason: reason, sub_agent_calls: calls}} ->
+                conn
+                |> put_status(422)
+                |> json(%{error: reason, sub_agent_calls: calls})
+            end
           end
       end
     end
@@ -55,33 +72,6 @@ defmodule NsparkWeb.Api.DeploymentController do
         {:ok, record} -> {record, m.organization_id}
         _ -> nil
       end
-    end)
-  end
-
-  defp snapshot_to_nodes(node_maps) do
-    Enum.map(node_maps, fn n ->
-      %{
-        type: String.to_existing_atom(n["type"]),
-        label: n["label"] || "",
-        content: n["content"] || "",
-        is_muted: n["is_muted"] || false
-      }
-    end)
-  end
-
-  defp inject_variables(nodes, variables) when map_size(variables) == 0, do: nodes
-
-  defp inject_variables(nodes, variables) do
-    Enum.map(nodes, fn node ->
-      content = node.content || ""
-
-      injected =
-        Enum.reduce(variables, content, fn {key, value}, acc ->
-          replacement = if is_binary(value), do: value, else: Jason.encode!(value)
-          String.replace(acc, "{#{key}}", replacement)
-        end)
-
-      Map.put(node, :content, injected)
     end)
   end
 end

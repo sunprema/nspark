@@ -51,13 +51,34 @@
 
   let debounce;
   let switching = false;
+  let pending = false; // unsaved edits for currentId
+
+  function pushContent(id, text) {
+    if (id) live?.pushEvent("update_node_content", { id, content: text });
+  }
+
+  // Immediately persist any pending edit. Called before swapping nodes, on
+  // blur, and on destroy so a debounced save is never silently discarded.
+  function flush() {
+    clearTimeout(debounce);
+    if (pending && view && currentId) {
+      pushContent(currentId, view.state.doc.toString());
+      pending = false;
+    }
+  }
+
   function onUpdate(u) {
     if (!u.docChanged || switching) return;
+    pending = true;
     clearTimeout(debounce);
+    // Capture the id now: a switch clears this timer, but capturing avoids
+    // ever saving stale text against a node that became current later.
+    const id = currentId;
     const text = u.state.doc.toString();
     debounce = setTimeout(() => {
-      if (currentId) live?.pushEvent("update_node_content", { id: currentId, content: text });
-    }, 1000);
+      pushContent(id, text);
+      pending = false;
+    }, 350);
   }
 
   const theme = EditorView.theme({
@@ -97,13 +118,19 @@
           autocompletion({ override: [variableCompletions] }),
           theme,
           EditorView.updateListener.of(onUpdate),
+          // Persist immediately when focus leaves the editor (e.g. clicking a
+          // node on the canvas) so the trailing debounce can't drop the edit.
+          EditorView.domEventHandlers({ blur: () => flush() }),
         ],
       }),
       parent: el,
     });
     currentId = node_id;
 
-    return () => view?.destroy();
+    return () => {
+      flush();
+      view?.destroy();
+    };
   });
 
   // Swap the document when a different node is selected.
@@ -111,8 +138,10 @@
   // view.dispatch() would otherwise fire synchronously via onUpdate.
   $effect(() => {
     if (view && node_id !== currentId) {
+      // Persist the outgoing node's edits before loading the new one, so a
+      // node switch mid-debounce never discards unsaved content.
+      flush();
       currentId = node_id;
-      clearTimeout(debounce);
       switching = true;
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: content },

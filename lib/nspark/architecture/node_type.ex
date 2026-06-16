@@ -10,6 +10,7 @@ defmodule Nspark.Architecture.NodeType do
       :memory,
       :tool,
       :evaluation,
-      :output
+      :output,
+      :agent
     ]
 end
