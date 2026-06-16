@@ -237,6 +237,28 @@ defmodule NsparkWeb.Api.PromptControllerTest do
     end
   end
 
+  describe "rate limiting" do
+    test "throttles a principal once its limit is exceeded", %{org: org, user: user, graph: graph} do
+      original = Application.get_env(:nspark, NsparkWeb.RateLimit)
+      Application.put_env(:nspark, NsparkWeb.RateLimit, limit: 2, window_ms: 60_000)
+      on_exit(fn -> Application.put_env(:nspark, NsparkWeb.RateLimit, original) end)
+
+      secret = issue(org, user, %{name: "limited"})
+      hit = fn -> key_conn(secret) |> get("/api/v1/prompts/#{graph.slug}") end
+
+      assert hit.().status == 200
+      ok = hit.()
+      assert ok.status == 200
+      assert get_resp_header(ok, "x-ratelimit-limit") == ["2"]
+      assert get_resp_header(ok, "x-ratelimit-remaining") == ["0"]
+
+      throttled = hit.()
+      assert throttled.status == 429
+      assert [_] = get_resp_header(throttled, "retry-after")
+      assert json_response(throttled, 429)["error"] =~ "rate limit"
+    end
+  end
+
   defp issue(org, user, attrs) do
     attrs = Map.merge(%{organization_id: org.id}, attrs)
     key = Nspark.Accounts.issue_api_key!(attrs, actor: user)

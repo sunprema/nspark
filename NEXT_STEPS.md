@@ -104,7 +104,11 @@ contract around it.
 - [ ] **Client SDK** (start with one language) — fetches by pinned version,
   caches locally, **falls back to last-known-good on our outage**, validates
   injected variables against the published schema before substituting.
-- [ ] **Rate limiting** on `/api/v1/*` (per key / per org).
+- [x] **Rate limiting** on `/api/v1/*` (per key / per org). Dependency-free ETS
+  fixed-window limiter (`Nspark.RateLimiter`, supervised, atomic `update_counter`
+  + periodic sweep) behind the `NsparkWeb.RateLimit` plug on both API pipelines.
+  Buckets by API key → user → IP; emits `x-ratelimit-*` headers and `429` +
+  `retry-after`. Limits configurable (`config :nspark, NsparkWeb.RateLimit`).
 - [ ] Define and publish a retrieval **SLA / latency budget**; add a health/
   readiness endpoint.
 

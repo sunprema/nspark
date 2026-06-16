@@ -19,6 +19,9 @@ config :phoenix_vite, PhoenixVite.Npm,
 
 config :ash_oban, pro?: false
 
+# Runtime API throttle: requests per window, per principal (API key / user / IP).
+config :nspark, NsparkWeb.RateLimit, limit: 120, window_ms: 60_000
+
 config :nspark, Oban,
   engine: Oban.Engines.Basic,
   notifier: Oban.Notifiers.Postgres,

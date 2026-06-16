@@ -20,6 +20,7 @@ defmodule NsparkWeb.Router do
     plug :accepts, ["json"]
     plug :load_from_bearer
     plug :set_actor, :user
+    plug NsparkWeb.RateLimit
   end
 
   # Runtime delivery: a scoped API key (preferred) or a user bearer token.
@@ -28,6 +29,7 @@ defmodule NsparkWeb.Router do
     plug NsparkWeb.ApiKeyAuth
     plug :load_from_bearer
     plug :set_actor, :user
+    plug NsparkWeb.RateLimit
   end
 
   scope "/", NsparkWeb do

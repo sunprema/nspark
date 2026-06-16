@@ -24,6 +24,7 @@ defmodule Nspark.Application do
          Application.fetch_env!(:nspark, Oban)
        )},
       {Phoenix.PubSub, name: Nspark.PubSub},
+      {Nspark.RateLimiter, window_ms: NsparkWeb.RateLimit.window_ms()},
       # Start a worker by calling: Nspark.Worker.start_link(arg)
       # {Nspark.Worker, arg},
       # Start to serve requests, typically the last entry
