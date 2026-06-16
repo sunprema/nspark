@@ -29,39 +29,75 @@ defmodule NsparkWeb.StudioLive do
   @palette_types Enum.map(@node_palette, fn {t, _} -> t end)
 
   @impl true
-  def mount(params, _session, socket) do
-    org = socket.assigns.current_org
-
-    socket =
-      case load_studio(params, org) do
-        {:ok, graph} ->
-          socket
-          |> assign(:org_id, org.id)
-          |> assign(:graph, graph)
-          |> assign(:selected, nil)
-          |> refresh()
-
-        :empty ->
-          socket
-          |> assign(:org_id, org.id)
-          |> assign(:graph, nil)
-          |> assign(:nodes, [])
-          |> assign(:flow_nodes, [])
-          |> assign(:flow_edges, [])
-          |> assign(:edge_count, 0)
-          |> assign(:variables, [])
-          |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0})
-          |> assign(:compiled_html, "")
-          |> assign(:selected, nil)
-      end
-
+  def mount(_params, _session, socket) do
     {:ok,
      socket
+     |> assign(:org_id, socket.assigns.current_org.id)
+     # graph canvas state — populated by handle_params
+     |> assign(:graph, nil)
+     |> assign(:nodes, [])
+     |> assign(:flow_nodes, [])
+     |> assign(:flow_edges, [])
+     |> assign(:edge_count, 0)
+     |> assign(:variables, [])
+     |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0, cost_estimate: 0.0, provider: :anthropic})
+     |> assign(:compiled_html, "")
+     |> assign(:selected, nil)
+     |> assign(:graph_dirty, false)
+     |> assign(:graph_versions, [])
+     |> assign(:diagnostics, [])
+     # agent picker
+     |> assign(:all_graphs, [])
+     |> assign(:graph_search, "")
+     |> assign(:show_agent_picker, false)
+     # ui
      |> assign(:palette, @node_palette)
      |> assign(:show_new_graph_modal, false)
      |> assign(:new_graph_name, "")
-     |> assign(:new_graph_description, "")}
+     |> assign(:new_graph_description, "")
+     |> assign(:show_deploy_modal, false)
+     |> assign(:compiler_view, :rendered)
+     |> assign(:selected_provider, :anthropic)}
   end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    org = socket.assigns.current_org
+    actor = socket.assigns.current_user
+    all_graphs = Ash.read!(Graph, tenant: org.id, actor: actor)
+
+    socket =
+      socket
+      |> assign(:all_graphs, all_graphs)
+      |> assign(:show_agent_picker, false)
+      |> assign(:graph_search, "")
+      |> load_from_params(params, all_graphs)
+
+    {:noreply, socket}
+  end
+
+  # ── agent picker ────────────────────────────────────────────────────────────
+
+  def handle_event("toggle_agent_picker", _params, socket) do
+    show = !socket.assigns.show_agent_picker
+    socket = assign(socket, :show_agent_picker, show)
+    socket = if show, do: assign(socket, :graph_search, ""), else: socket
+    {:noreply, socket}
+  end
+
+  def handle_event("close_agent_picker", _params, socket) do
+    {:noreply, assign(socket, :show_agent_picker, false)}
+  end
+
+  def handle_event("search_agents", %{"value" => query}, socket) do
+    {:noreply, assign(socket, :graph_search, query)}
+  end
+
+  def handle_event("agent_picker_keydown", %{"key" => "Escape"}, socket) do
+    {:noreply, assign(socket, :show_agent_picker, false)}
+  end
+
+  def handle_event("agent_picker_keydown", _params, socket), do: {:noreply, socket}
 
   # ── selection ───────────────────────────────────────────────────────────────
 
@@ -77,17 +113,19 @@ defmodule NsparkWeb.StudioLive do
   # ── drag → persist position (no re-push; client already shows it) ────────────
 
   def handle_event("node_moved", %{"id" => id, "x" => x, "y" => y}, socket) do
+    opts = ash_opts(socket)
+
     nodes =
       Enum.map(socket.assigns.nodes, fn n ->
         if n.id == id do
           meta = Map.put(n.metadata || %{}, "position", %{"x" => x, "y" => y})
-          Ash.update!(n, %{metadata: meta}, tenant: socket.assigns.org_id)
+          Ash.update!(n, %{metadata: meta}, opts)
         else
           n
         end
       end)
 
-    {:noreply, assign(socket, :nodes, nodes)}
+    {:noreply, socket |> assign(:nodes, nodes) |> mark_dirty()}
   end
 
   # ── connect → create edge ────────────────────────────────────────────────────
@@ -97,9 +135,9 @@ defmodule NsparkWeb.StudioLive do
     case Ash.create(
            Edge,
            %{graph_id: socket.assigns.graph.id, source_node_id: s, target_node_id: t},
-           tenant: socket.assigns.org_id
+           ash_opts(socket)
          ) do
-      {:ok, _edge} -> {:noreply, refresh(socket)}
+      {:ok, _edge} -> {:noreply, socket |> refresh() |> mark_dirty()}
       # ignore duplicate / invalid connections
       {:error, _} -> {:noreply, socket}
     end
@@ -114,7 +152,7 @@ defmodule NsparkWeb.StudioLive do
       count = length(socket.assigns.nodes)
       pos = %{"x" => 440, "y" => 60 + rem(count, 8) * 44}
       create_node(type_atom, pos, socket)
-      {:noreply, refresh(socket)}
+      {:noreply, socket |> refresh() |> mark_dirty()}
     else
       _ -> {:noreply, socket}
     end
@@ -126,7 +164,7 @@ defmodule NsparkWeb.StudioLive do
     with {:ok, type_atom} <- palette_type(type) do
       pos = %{"x" => x, "y" => y}
       create_node(type_atom, pos, socket)
-      {:noreply, refresh(socket)}
+      {:noreply, socket |> refresh() |> mark_dirty()}
     else
       _ -> {:noreply, socket}
     end
@@ -135,10 +173,9 @@ defmodule NsparkWeb.StudioLive do
   # ── delete (keyboard from canvas) ────────────────────────────────────────────
 
   def handle_event("delete_elements", params, socket) do
-    org_id = socket.assigns.org_id
-    Enum.each(Map.get(params, "edges", []), &destroy_edge(&1, org_id))
-    Enum.each(Map.get(params, "nodes", []), &destroy_node(&1, socket, org_id))
-    {:noreply, socket |> assign(:selected, nil) |> refresh()}
+    Enum.each(Map.get(params, "edges", []), &destroy_edge(&1, socket))
+    Enum.each(Map.get(params, "nodes", []), &destroy_node(&1, socket))
+    {:noreply, socket |> assign(:selected, nil) |> refresh() |> mark_dirty()}
   end
 
   # ── inspector: edit, mute, delete ────────────────────────────────────────────
@@ -154,8 +191,8 @@ defmodule NsparkWeb.StudioLive do
           |> put_if_present(params, "label", &(String.trim(&1) != ""))
           |> put_if_present(params, "content")
 
-        _ = Ash.update!(node, attrs, tenant: socket.assigns.org_id)
-        {:noreply, refresh(socket)}
+        _ = Ash.update!(node, attrs, ash_opts(socket))
+        {:noreply, socket |> refresh() |> mark_dirty()}
     end
   end
 
@@ -168,8 +205,8 @@ defmodule NsparkWeb.StudioLive do
         {:noreply, socket}
 
       node ->
-        _ = Ash.update!(node, %{content: content}, tenant: socket.assigns.org_id)
-        {:noreply, refresh(socket)}
+        _ = Ash.update!(node, %{content: content}, ash_opts(socket))
+        {:noreply, socket |> refresh() |> mark_dirty()}
     end
   end
 
@@ -179,14 +216,14 @@ defmodule NsparkWeb.StudioLive do
         {:noreply, socket}
 
       node ->
-        _ = Ash.update!(node, %{is_muted: !node.is_muted}, tenant: socket.assigns.org_id)
-        {:noreply, refresh(socket)}
+        _ = Ash.update!(node, %{is_muted: !node.is_muted}, ash_opts(socket))
+        {:noreply, socket |> refresh() |> mark_dirty()}
     end
   end
 
   def handle_event("delete_node", %{"id" => id}, socket) do
-    destroy_node(id, socket, socket.assigns.org_id)
-    {:noreply, socket |> assign(:selected, nil) |> refresh()}
+    destroy_node(id, socket)
+    {:noreply, socket |> assign(:selected, nil) |> refresh() |> mark_dirty()}
   end
 
   # ── new graph modal ──────────────────────────────────────────────────────────
@@ -216,13 +253,13 @@ defmodule NsparkWeb.StudioLive do
     if name == "" do
       {:noreply, socket}
     else
-      org_id = socket.assigns.org_id
+      opts = ash_opts(socket)
 
       project_id =
-        case Project |> Ash.read!(tenant: org_id) do
+        case Project |> Ash.read!(opts) do
           [p | _] -> p.id
           [] ->
-            p = Ash.create!(Project, %{name: "Default", status: :active}, tenant: org_id)
+            p = Ash.create!(Project, %{name: "Default", status: :active}, opts)
             p.id
         end
 
@@ -235,16 +272,146 @@ defmodule NsparkWeb.StudioLive do
           end
         end)
 
-      graph = Ash.create!(Graph, attrs, tenant: org_id)
+      graph = Ash.create!(Graph, attrs, opts)
 
       {:noreply,
        socket
        |> assign(:show_new_graph_modal, false)
-       |> push_navigate(to: ~p"/studio/#{graph.id}")}
+       |> push_patch(to: ~p"/studio/#{graph.id}")}
+    end
+  end
+
+  # ── publish / version restore ───────────────────────────────────────────────
+
+  def handle_event("publish", _params, socket) do
+    %{graph: graph, nodes: nodes} = socket.assigns
+    # Fetch current edges (not in top-level assigns)
+    opts = ash_opts(socket)
+    edges = Edge |> filter(graph_id == ^graph.id) |> Ash.read!(opts)
+
+    case Nspark.Architecture.publish_graph(graph, nodes, edges, socket.assigns.current_user, socket.assigns.org_id) do
+      {:ok, version} ->
+        updated_graph = Ash.reload!(graph, opts)
+
+        {:noreply,
+         socket
+         |> assign(:graph, updated_graph)
+         |> assign(:graph_dirty, false)
+         |> load_versions()
+         |> put_flash(:info, "Published v#{version.version_number}")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Publish failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("restore_version", %{"id" => version_id}, socket) do
+    version = Enum.find(socket.assigns.graph_versions, &(&1.id == version_id))
+
+    if version do
+      case Nspark.Architecture.restore_version(version, socket.assigns.graph, socket.assigns.current_user, socket.assigns.org_id) do
+        {:ok, _id_map} ->
+          {:noreply,
+           socket
+           |> assign(:selected, nil)
+           |> refresh()
+           |> assign(:graph_dirty, false)
+           |> put_flash(:info, "Restored to v#{version.version_number}")}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Restore failed: #{inspect(reason)}")}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # ── compiler controls ───────────────────────────────────────────────────────
+
+  def handle_event("toggle_compiler_view", _params, socket) do
+    view = if socket.assigns.compiler_view == :rendered, do: :raw, else: :rendered
+    {:noreply, assign(socket, :compiler_view, view)}
+  end
+
+  def handle_event("set_provider", %{"provider" => prov_str}, socket) do
+    provider =
+      case prov_str do
+        "openai" -> :openai
+        "gemini" -> :gemini
+        _ -> :anthropic
+      end
+
+    {:noreply, socket |> assign(:selected_provider, provider) |> refresh()}
+  end
+
+  # ── deploy ──────────────────────────────────────────────────────────────────
+
+  def handle_event("open_deploy_modal", _params, socket) do
+    {:noreply, assign(socket, :show_deploy_modal, true)}
+  end
+
+  def handle_event("close_deploy_modal", _params, socket) do
+    {:noreply, assign(socket, :show_deploy_modal, false)}
+  end
+
+  def handle_event("deploy", %{"environment" => env_str}, socket) do
+    case socket.assigns.graph_versions do
+      [] ->
+        {:noreply, put_flash(socket, :error, "Publish a version before deploying.")}
+
+      [latest | _] ->
+        env =
+          case env_str do
+            "staging" -> :staging
+            "production" -> :production
+            _ -> :dev
+          end
+
+        attrs = %{
+          environment: env,
+          project_id: socket.assigns.graph.project_id,
+          graph_version_id: latest.id,
+          deployed_version: latest.version_number
+        }
+
+        opts = ash_opts(socket)
+
+        case Nspark.Deployments.deploy_version(attrs, opts) do
+          {:ok, dep} ->
+            {:noreply,
+             socket
+             |> assign(:show_deploy_modal, false)
+             |> put_flash(
+               :info,
+               "Deployed v#{dep.deployed_version} to #{dep.environment} · endpoint: #{dep.endpoint_slug}"
+             )}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Deploy failed: #{inspect(reason)}")}
+        end
     end
   end
 
   # ── data ──────────────────────────────────────────────────────────────────────
+
+  defp ash_opts(socket), do: [tenant: socket.assigns.org_id, actor: socket.assigns.current_user]
+
+  defp mark_dirty(socket), do: assign(socket, :graph_dirty, true)
+
+  defp load_versions(socket) do
+    case socket.assigns[:graph] do
+      nil ->
+        assign(socket, :graph_versions, [])
+
+      graph ->
+        versions =
+          Nspark.Architecture.versions_for_graph!(graph.id, tenant: socket.assigns.org_id, actor: socket.assigns.current_user)
+
+        # Dirty on mount if no published version exists yet.
+        dirty = socket.assigns[:graph_dirty] || versions == []
+        socket |> assign(:graph_versions, versions) |> assign(:graph_dirty, dirty)
+    end
+  end
 
   defp create_node(type_atom, pos, socket) do
     Ash.create!(
@@ -255,41 +422,78 @@ defmodule NsparkWeb.StudioLive do
         graph_id: socket.assigns.graph.id,
         metadata: %{"position" => pos}
       },
-      tenant: socket.assigns.org_id
+      ash_opts(socket)
     )
   end
 
-  defp load_studio(params, org) do
-    graphs = Ash.read!(Graph, tenant: org.id)
-
+  defp load_from_params(socket, params, all_graphs) do
     graph =
       case params["graph_id"] do
-        nil -> List.first(graphs)
-        id -> Enum.find(graphs, &(&1.id == id)) || List.first(graphs)
+        nil -> List.first(all_graphs)
+        id -> Enum.find(all_graphs, &(&1.id == id)) || List.first(all_graphs)
       end
 
-    if graph, do: {:ok, graph}, else: :empty
+    if graph do
+      socket
+      |> assign(:graph, graph)
+      |> assign(:selected, nil)
+      |> assign(:graph_dirty, false)
+      |> refresh()
+      |> load_versions()
+    else
+      socket
+      |> assign(:graph, nil)
+      |> assign(:nodes, [])
+      |> assign(:flow_nodes, [])
+      |> assign(:flow_edges, [])
+      |> assign(:edge_count, 0)
+      |> assign(:variables, [])
+      |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0, cost_estimate: 0.0, provider: :anthropic})
+      |> assign(:compiled_html, "")
+      |> assign(:selected, nil)
+      |> assign(:graph_dirty, false)
+      |> assign(:graph_versions, [])
+    end
+  end
+
+  defp filtered_graphs(graphs, ""), do: graphs
+  defp filtered_graphs(graphs, search) do
+    q = String.downcase(search)
+    Enum.filter(graphs, fn g -> String.contains?(String.downcase(g.name), q) end)
   end
 
   defp refresh(socket) do
-    %{org_id: org_id, graph: graph} = socket.assigns
+    %{graph: graph} = socket.assigns
+    opts = ash_opts(socket)
     selected_id = socket.assigns[:selected] && socket.assigns.selected.id
+    provider = socket.assigns[:selected_provider] || :anthropic
 
     nodes =
-      Node |> filter(graph_id == ^graph.id) |> sort(inserted_at: :asc) |> Ash.read!(tenant: org_id)
+      Node |> filter(graph_id == ^graph.id) |> sort(inserted_at: :asc) |> Ash.read!(opts)
 
-    edges = Edge |> filter(graph_id == ^graph.id) |> Ash.read!(tenant: org_id)
+    edges = Edge |> filter(graph_id == ^graph.id) |> Ash.read!(opts)
 
-    compiled = Nspark.Compiler.compile(nodes)
+    compiled = Nspark.Compiler.compile(nodes, edges, provider: provider)
+    diagnostics = Nspark.Diagnostics.run(nodes, edges)
+
+    node_diagnostics =
+      Enum.reduce(diagnostics, %{}, fn diag, acc ->
+        Enum.reduce(diag.node_ids, acc, fn id, acc ->
+          Map.update(acc, id, diag.level, fn existing ->
+            if diag.level == :error, do: :error, else: existing
+          end)
+        end)
+      end)
 
     socket
     |> assign(:nodes, nodes)
-    |> assign(:flow_nodes, to_flow_nodes(nodes))
+    |> assign(:flow_nodes, to_flow_nodes(nodes, node_diagnostics))
     |> assign(:flow_edges, to_flow_edges(edges))
     |> assign(:edge_count, length(edges))
     |> assign(:variables, variables_in(nodes))
     |> assign(:compiled, compiled)
     |> assign(:compiled_html, render_compiled(compiled.markdown))
+    |> assign(:diagnostics, diagnostics)
     |> assign(:selected, selected_id && Enum.find(nodes, &(&1.id == selected_id)))
   end
 
@@ -311,7 +515,9 @@ defmodule NsparkWeb.StudioLive do
 
   defp find(socket, id), do: Enum.find(socket.assigns.nodes, &(&1.id == id))
 
-  defp destroy_node(id, socket, org_id) do
+  defp destroy_node(id, socket) do
+    opts = ash_opts(socket)
+
     case find(socket, id) do
       nil ->
         :ok
@@ -319,16 +525,18 @@ defmodule NsparkWeb.StudioLive do
       node ->
         Edge
         |> filter(source_node_id == ^id or target_node_id == ^id)
-        |> Ash.read!(tenant: org_id)
-        |> Enum.each(&Ash.destroy!(&1, tenant: org_id))
+        |> Ash.read!(opts)
+        |> Enum.each(&Ash.destroy!(&1, opts))
 
-        Ash.destroy!(node, tenant: org_id)
+        Ash.destroy!(node, opts)
     end
   end
 
-  defp destroy_edge(id, org_id) do
-    case Edge |> filter(id == ^id) |> Ash.read_one(tenant: org_id) do
-      {:ok, %Edge{} = edge} -> Ash.destroy!(edge, tenant: org_id)
+  defp destroy_edge(id, socket) do
+    opts = ash_opts(socket)
+
+    case Edge |> filter(id == ^id) |> Ash.read_one(opts) do
+      {:ok, %Edge{} = edge} -> Ash.destroy!(edge, opts)
       _ -> :ok
     end
   end
@@ -340,6 +548,27 @@ defmodule NsparkWeb.StudioLive do
     ArgumentError -> :error
   end
 
+  defp format_cost(c) when c < 0.001, do: "<$0.001"
+  defp format_cost(c), do: "$#{:erlang.float_to_binary(c, decimals: 4)}"
+
+  defp diag_summary([]), do: {:ok, 0, 0}
+  defp diag_summary(diags) do
+    errors = Enum.count(diags, &(&1.level == :error))
+    warnings = Enum.count(diags, &(&1.level == :warning))
+    level = cond do
+      errors > 0 -> :error
+      warnings > 0 -> :warning
+      true -> :ok
+    end
+    {level, errors, warnings}
+  end
+
+  defp diag_bar_label(:ok, _e, _w), do: "✓ Ready"
+  defp diag_bar_label(:warning, _e, w), do: "⚠ #{w} warning#{if w > 1, do: "s"}"
+  defp diag_bar_label(:error, e, 0), do: "✕ #{e} error#{if e > 1, do: "s"}"
+  defp diag_bar_label(:error, e, w),
+    do: "✕ #{e} error#{if e > 1, do: "s"} · #{w} warning#{if w > 1, do: "s"}"
+
   defp put_if_present(attrs, params, key, valid? \\ fn _ -> true end) do
     case Map.fetch(params, key) do
       {:ok, value} -> if valid?.(value), do: Map.put(attrs, String.to_atom(key), value), else: attrs
@@ -349,10 +578,17 @@ defmodule NsparkWeb.StudioLive do
 
   # ── flow serialization ──────────────────────────────────────────────────────
 
-  defp to_flow_nodes(nodes) do
+  defp to_flow_nodes(nodes, node_diagnostics) do
     nodes
     |> Enum.with_index()
     |> Enum.map(fn {n, i} ->
+      diag =
+        case Map.get(node_diagnostics, n.id) do
+          :error -> "error"
+          :warning -> "warning"
+          nil -> nil
+        end
+
       %{
         id: n.id,
         type: "blueprint",
@@ -361,7 +597,8 @@ defmodule NsparkWeb.StudioLive do
           label: n.label,
           node_type: to_string(n.type),
           content: n.content,
-          muted: n.is_muted
+          muted: n.is_muted,
+          diagnostic: diag
         }
       }
     end)
@@ -386,9 +623,44 @@ defmodule NsparkWeb.StudioLive do
         <div class="studio-bar">
           <div class="studio-mark"><span></span></div>
           <div class="studio-title">Newtonian&nbsp;Spark</div>
-          <div class="studio-graph">/ {if @graph, do: @graph.name, else: "no graph"}</div>
-          <div :if={@graph} class="studio-chip">v{@graph.graph_version}</div>
+          <div class="studio-graph-wrap">
+            <button type="button" phx-click="toggle_agent_picker" class="studio-graph-btn">
+              <span class="studio-graph">/ {if @graph, do: @graph.name, else: "select agent"}</span>
+              <span class="studio-graph-caret">{if @show_agent_picker, do: "▴", else: "▾"}</span>
+            </button>
+            <div :if={@graph} class="studio-chip">v{@graph.graph_version}</div>
+            <%= if @show_agent_picker do %>
+              <div class="studio-picker-overlay" phx-click="close_agent_picker"></div>
+              <div class="agent-picker">
+                <input
+                  type="text"
+                  value={@graph_search}
+                  phx-keyup="search_agents"
+                  phx-keydown="agent_picker_keydown"
+                  placeholder="Search agents…"
+                  class="agent-picker-search"
+                  autofocus
+                  phx-debounce="100"
+                />
+                <div class="agent-picker-list">
+                  <% matches = filtered_graphs(@all_graphs, @graph_search) %>
+                  <.link
+                    :for={g <- matches}
+                    patch={~p"/studio/#{g.id}"}
+                    class={["agent-picker-item", @graph && @graph.id == g.id && "agent-picker-item--active"]}
+                  >
+                    <span class="agent-picker-name">{g.name}</span>
+                    <span class="agent-picker-meta">v{g.graph_version}</span>
+                  </.link>
+                  <div :if={matches == []} class="agent-picker-empty">No agents match</div>
+                </div>
+              </div>
+            <% end %>
+          </div>
           <div class="studio-spacer"></div>
+          <div class={["studio-dirty", @graph_dirty && "studio-dirty--on"]}>
+            {if @graph_dirty, do: "● unsaved", else: "✓ published"}
+          </div>
           <details class="relative">
             <summary class="studio-btn" style="list-style: none; cursor: pointer; user-select: none;">
               {@current_org.name} <span style="font-size: 9px; opacity: 0.6;">▾</span>
@@ -403,12 +675,29 @@ defmodule NsparkWeb.StudioLive do
               </a>
             </div>
           </details>
+          <a href={~p"/org/members"} class="studio-btn" style="text-decoration: none;">Members</a>
           <button type="button" phx-click="open_new_graph_modal" class="studio-btn studio-btn--new">
             + New Agent
           </button>
           <div class="studio-btn">Import Prompt</div>
           <div class="studio-btn studio-btn--accent">✦ Import &amp; Architect</div>
-          <div class="studio-btn studio-btn--solid">▸ Compile</div>
+          <button
+            :if={@graph}
+            type="button"
+            phx-click="publish"
+            class={["studio-btn studio-btn--solid", not @graph_dirty && "studio-btn--published"]}
+            disabled={not @graph_dirty}
+          >
+            ▸ Publish
+          </button>
+          <button
+            :if={@graph && @graph_versions != []}
+            type="button"
+            phx-click="open_deploy_modal"
+            class="studio-btn studio-btn--deploy"
+          >
+            ⬆ Deploy
+          </button>
         </div>
 
         <div class="studio-cols">
@@ -512,6 +801,26 @@ defmodule NsparkWeb.StudioLive do
               </div>
             <% else %>
                 <div class="insp-empty">Select a node to inspect it.</div>
+
+                <%!-- Version history when no node selected --%>
+                <div :if={@graph_versions != []} class="versions-panel">
+                  <div class="versions-head">VERSION HISTORY</div>
+                  <div class="versions-list">
+                    <div :for={v <- @graph_versions} class="version-row">
+                      <span class="version-num">v{v.version_number}</span>
+                      <span class="version-date">{Calendar.strftime(v.inserted_at, "%b %d")}</span>
+                      <button
+                        type="button"
+                        phx-click="restore_version"
+                        phx-value-id={v.id}
+                        data-confirm={"Restore to v#{v.version_number}? Current canvas will be replaced."}
+                        class="version-restore-btn"
+                      >
+                        Restore
+                      </button>
+                    </div>
+                  </div>
+                </div>
               <% end %>
 
               <div class="insp-foot">
@@ -520,20 +829,66 @@ defmodule NsparkWeb.StudioLive do
             </div>
 
             <div class="compiler-panel">
+              <% {diag_level, diag_errors, diag_warnings} = diag_summary(@diagnostics) %>
+              <div class={["diag-bar",
+                diag_level == :ok && "diag-bar--ok",
+                diag_level == :warning && "diag-bar--warn",
+                diag_level == :error && "diag-bar--error"
+              ]}>
+                {diag_bar_label(diag_level, diag_errors, diag_warnings)}
+              </div>
+              <div :if={@diagnostics != []} class="diag-list">
+                <div
+                  :for={d <- @diagnostics}
+                  class={["diag-item", d.level == :error && "diag-item--error", d.level == :warning && "diag-item--warn"]}
+                >
+                  <span class="diag-icon">{if d.level == :error, do: "✕", else: "⚠"}</span>
+                  <span class="diag-msg">{d.message}</span>
+                </div>
+              </div>
               <div class="compiler-head">
                 <span>Live Compiler</span>
-                <span class="compiler-live"><i></i>LIVE</span>
+                <div class="compiler-controls">
+                  <select
+                    phx-change="set_provider"
+                    name="provider"
+                    class="compiler-select"
+                  >
+                    <option value="anthropic" selected={@selected_provider == :anthropic}>Anthropic</option>
+                    <option value="openai" selected={@selected_provider == :openai}>OpenAI</option>
+                    <option value="gemini" selected={@selected_provider == :gemini}>Gemini</option>
+                  </select>
+                  <button
+                    type="button"
+                    phx-click="toggle_compiler_view"
+                    class="compiler-ctrl-btn"
+                  >
+                    {if @compiler_view == :rendered, do: "Raw", else: "Preview"}
+                  </button>
+                  <button
+                    id="copy-compiled"
+                    type="button"
+                    phx-hook="CopyToClipboard"
+                    data-content={@compiled.markdown}
+                    class="compiler-ctrl-btn"
+                  >
+                    Copy
+                  </button>
+                  <span class="compiler-live"><i></i>LIVE</span>
+                </div>
               </div>
               <div class="compiler-stats">
-                ≈ {@compiled.token_estimate} tokens · {@compiled.included} nodes<span :if={
-                  @compiled.excluded > 0
-                }>· {@compiled.excluded} muted</span>
+                ≈ {@compiled.token_estimate} tokens<span :if={@compiled.cost_estimate > 0}> · ~{format_cost(@compiled.cost_estimate)}</span> · {@compiled.included} nodes<span :if={@compiled.excluded > 0}> · {@compiled.excluded} muted</span>
               </div>
               <div class="compiler-body">
                 <%= if @compiled_html == "" do %>
                   <div class="compiler-empty">Nothing to compile yet.</div>
                 <% else %>
-                  <div class="compiler-md">{raw(@compiled_html)}</div>
+                  <%= if @compiler_view == :rendered do %>
+                    <div class="compiler-md">{raw(@compiled_html)}</div>
+                  <% else %>
+                    <pre class="compiler-raw">{@compiled.markdown}</pre>
+                  <% end %>
                 <% end %>
               </div>
             </div>
@@ -574,6 +929,33 @@ defmodule NsparkWeb.StudioLive do
                 </button>
                 <button type="submit" class="dlg-btn dlg-btn--create" disabled={String.trim(@new_graph_name) == ""}>
                   Create Agent
+                </button>
+              </div>
+            </.form>
+          </div>
+        </div>
+      <% end %>
+      <%= if @show_deploy_modal do %>
+        <div class="dlg-overlay">
+          <div class="dlg-backdrop" phx-click="close_deploy_modal"></div>
+          <div class="dlg-box">
+            <div class="dlg-head">DEPLOY AGENT</div>
+            <div class="dlg-sub">
+              Pinning version v{List.first(@graph_versions).version_number} of <strong>{@graph.name}</strong>
+            </div>
+            <.form for={%{}} id="deploy-form" phx-submit="deploy">
+              <div class="dlg-field-label">ENVIRONMENT</div>
+              <select name="environment" class="dlg-input dlg-select">
+                <option value="dev">Development</option>
+                <option value="staging">Staging</option>
+                <option value="production">Production</option>
+              </select>
+              <div class="dlg-actions">
+                <button type="button" phx-click="close_deploy_modal" class="dlg-btn dlg-btn--cancel">
+                  Cancel
+                </button>
+                <button type="submit" class="dlg-btn dlg-btn--create">
+                  Deploy
                 </button>
               </div>
             </.form>

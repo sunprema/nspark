@@ -40,7 +40,15 @@ defmodule NsparkWeb.Router do
 
       live "/studio", StudioLive
       live "/studio/:graph_id", StudioLive
+      live "/org/members", OrgMembersLive
     end
+  end
+
+  scope "/api/v1", NsparkWeb.Api do
+    pipe_through [:api]
+
+    post "/graphs/:graph_id/compile", GraphController, :compile
+    post "/deployments/:deployment_id/run", DeploymentController, :run
   end
 
   scope "/api/json" do
@@ -58,6 +66,7 @@ defmodule NsparkWeb.Router do
 
     get "/", PageController, :home
     get "/switch-org/:org_id", OrgController, :switch
+    get "/invitations/:token", InvitationController, :accept
     auth_routes AuthController, Nspark.Accounts.User, path: "/auth"
     sign_out_route AuthController
 

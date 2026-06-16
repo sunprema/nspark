@@ -52,11 +52,24 @@ const DragRailNode = {
   },
 };
 
+const CopyToClipboard = {
+  mounted() {
+    this.el.addEventListener("click", () => {
+      const content = this.el.dataset.content || "";
+      navigator.clipboard.writeText(content).then(() => {
+        const orig = this.el.textContent;
+        this.el.textContent = "Copied!";
+        setTimeout(() => { this.el.textContent = orig; }, 1800);
+      });
+    });
+  },
+};
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, ...getHooks(Components), DragRailNode},
+  hooks: {...colocatedHooks, ...getHooks(Components), DragRailNode, CopyToClipboard},
 })
 
 // Show progress bar on live navigation and form submits

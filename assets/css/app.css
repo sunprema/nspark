@@ -82,6 +82,23 @@
 .studio-spacer {
   flex: 1;
 }
+.studio-dirty {
+  font: 500 10px/1 'IBM Plex Mono', monospace;
+  letter-spacing: 0.06em;
+  padding: 4px 8px;
+  color: oklch(0.55 0.08 140);
+  background: oklch(0.95 0.03 140);
+  border: 1px solid oklch(0.78 0.06 140);
+}
+.studio-dirty--on {
+  color: oklch(0.5 0.12 55);
+  background: oklch(0.96 0.04 55);
+  border-color: oklch(0.78 0.08 55);
+}
+.studio-btn--published {
+  opacity: 0.5;
+  cursor: default;
+}
 .studio-btn {
   font: 500 11.5px/1 "IBM Plex Mono", monospace;
   color: oklch(0.38 0.02 255);
@@ -316,6 +333,38 @@
   padding: 8px 10px;
   overflow-x: auto;
 }
+.compiler-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.compiler-select {
+  font: 500 10px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.4 0.02 255);
+  background: oklch(0.99 0.003 245);
+  border: 1px solid oklch(0.82 0.02 250);
+  padding: 4px 6px;
+  appearance: none;
+  cursor: pointer;
+}
+.compiler-ctrl-btn {
+  font: 500 10px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.45 0.03 255);
+  background: oklch(0.96 0.004 245);
+  border: 1px solid oklch(0.82 0.02 250);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.compiler-ctrl-btn:hover {
+  background: oklch(0.93 0.01 250);
+}
+.compiler-raw {
+  font: 400 11px/1.6 "IBM Plex Mono", monospace;
+  color: oklch(0.34 0.02 255);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
 .insp-head {
   flex: 0 0 auto;
   padding: 12px 14px;
@@ -331,6 +380,19 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+/* CodeEditor (Live Svelte wrapper chain) grows to fill inspector space */
+[id^="CodeEditor"] {
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+}
+[id^="CodeEditor"] > div {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .insp-field-label {
   font: 600 9px/1 "IBM Plex Mono", monospace;
@@ -362,7 +424,7 @@
   align-items: center;
   justify-content: space-between;
   border-top: 1px solid oklch(0.88 0.015 250);
-  margin-top: 12px;
+  margin-top: auto;
   padding-top: 11px;
   font: 500 11px/1 "IBM Plex Sans", sans-serif;
   color: oklch(0.4 0.02 255);
@@ -405,6 +467,16 @@
   background: oklch(0.93 0.04 155);
 }
 
+/* Deploy button in the studio bar */
+.studio-btn--deploy {
+  color: oklch(0.4 0.12 270);
+  border-color: oklch(0.68 0.1 270);
+  background: oklch(0.96 0.03 270);
+}
+.studio-btn--deploy:hover {
+  background: oklch(0.92 0.05 270);
+}
+
 /* New-graph dialog */
 .dlg-overlay {
   position: fixed;
@@ -435,6 +507,16 @@
   letter-spacing: 0.14em;
   color: oklch(0.38 0.08 255);
   margin-bottom: 14px;
+}
+.dlg-sub {
+  font: 400 12px/1.4 "IBM Plex Sans", sans-serif;
+  color: oklch(0.52 0.03 255);
+  margin-top: -8px;
+  margin-bottom: 8px;
+}
+.dlg-select {
+  appearance: none;
+  cursor: pointer;
 }
 .dlg-field-label {
   font: 600 9px/1 "IBM Plex Mono", monospace;
@@ -495,4 +577,521 @@
 .dlg-btn--create:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+/* ───────────────────────── Agent Picker ──────────────────────────────────── */
+.studio-graph-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.studio-graph-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  cursor: pointer;
+}
+.studio-graph-btn:hover .studio-graph {
+  color: oklch(0.45 0.05 255);
+}
+
+.studio-graph-caret {
+  font-size: 9px;
+  color: oklch(0.65 0.01 250);
+  line-height: 1;
+}
+
+/* Transparent full-screen backdrop — captures outside clicks to close picker */
+.studio-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 199;
+  cursor: default;
+}
+
+.agent-picker {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: -6px;
+  z-index: 200;
+  min-width: 280px;
+  max-width: 400px;
+  background: oklch(0.985 0.004 245);
+  border: 1px solid oklch(0.78 0.04 255);
+  box-shadow: 0 6px 20px oklch(0.2 0.02 255 / 0.14);
+}
+
+.agent-picker-search {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font: 500 11.5px/1 "IBM Plex Mono", monospace;
+  border: none;
+  border-bottom: 1px solid oklch(0.88 0.015 250);
+  padding: 10px 12px;
+  background: oklch(0.975 0.003 245);
+  color: oklch(0.28 0.02 255);
+  outline: none;
+}
+.agent-picker-search::placeholder {
+  color: oklch(0.68 0.01 250);
+}
+.agent-picker-search:focus {
+  background: oklch(0.99 0.003 245);
+}
+
+.agent-picker-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.agent-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-bottom: 1px solid oklch(0.94 0.006 250);
+  text-decoration: none;
+  cursor: pointer;
+  gap: 8px;
+}
+.agent-picker-item:last-child {
+  border-bottom: none;
+}
+.agent-picker-item:hover {
+  background: oklch(0.96 0.015 255);
+}
+.agent-picker-item--active {
+  background: oklch(0.95 0.025 255);
+}
+
+.agent-picker-name {
+  font: 500 12px/1.2 "IBM Plex Sans", sans-serif;
+  color: oklch(0.3 0.02 255);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-picker-item--active .agent-picker-name {
+  color: oklch(0.38 0.1 255);
+}
+
+.agent-picker-meta {
+  font: 500 10px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.62 0.02 255);
+  flex-shrink: 0;
+}
+
+.agent-picker-empty {
+  padding: 14px 12px;
+  font: 400 11px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.62 0.015 250);
+}
+
+/* ───────────────────────── Members / Org Management ──────────────────────── */
+.members-page {
+  padding: 28px 40px;
+  max-width: 760px;
+  margin: 0 auto;
+  font-family: 'IBM Plex Mono', monospace;
+  color: oklch(0.28 0.02 255);
+}
+.members-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 32px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid oklch(0.88 0.01 250);
+}
+.members-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: oklch(0.38 0.02 255);
+  flex: 1;
+}
+.members-role-chip {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: oklch(0.5 0.13 255);
+  background: oklch(0.94 0.03 255);
+  padding: 3px 8px;
+  border-radius: 2px;
+}
+.members-section {
+  margin-bottom: 36px;
+}
+.members-section-head {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: oklch(0.55 0.04 255);
+  margin-bottom: 12px;
+}
+.members-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.members-table th {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: oklch(0.58 0.03 255);
+  text-align: left;
+  padding: 0 10px 8px 0;
+  border-bottom: 1px solid oklch(0.92 0.01 250);
+}
+.members-table td {
+  padding: 9px 10px 9px 0;
+  border-bottom: 1px solid oklch(0.94 0.006 250);
+  vertical-align: middle;
+}
+.members-date {
+  color: oklch(0.6 0.02 255);
+  font-size: 10px;
+}
+.members-empty {
+  font-size: 11px;
+  color: oklch(0.65 0.02 255);
+  font-style: italic;
+}
+.role-chip {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border-radius: 2px;
+  background: oklch(0.94 0.01 250);
+  color: oklch(0.42 0.03 255);
+}
+.role-chip[data-role="owner"] { background: oklch(0.93 0.04 255); color: oklch(0.38 0.1 255); }
+.role-chip[data-role="admin"]  { background: oklch(0.93 0.04 200); color: oklch(0.38 0.1 200); }
+.members-action-btn {
+  font: 500 10px/1 'IBM Plex Mono', monospace;
+  letter-spacing: 0.06em;
+  padding: 4px 10px;
+  border: 1px solid oklch(0.82 0.02 250);
+  background: oklch(0.97 0.004 245);
+  color: oklch(0.42 0.03 255);
+  cursor: pointer;
+  border-radius: 2px;
+}
+.members-action-btn:hover { background: oklch(0.94 0.01 250); }
+.members-action-btn--danger { color: oklch(0.48 0.15 20); border-color: oklch(0.82 0.06 20); }
+.members-action-btn--danger:hover { background: oklch(0.97 0.02 20); }
+.members-invite {
+  background: oklch(0.985 0.003 245);
+  border: 1px solid oklch(0.9 0.01 250);
+  padding: 20px 24px;
+}
+.invite-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.invite-input {
+  flex: 1;
+  font: 400 11px/1 'IBM Plex Mono', monospace;
+  padding: 7px 10px;
+  border: 1px solid oklch(0.82 0.02 250);
+  background: white;
+  color: oklch(0.28 0.02 255);
+  outline: none;
+}
+.invite-input:focus { border-color: oklch(0.55 0.1 255); }
+.invite-select {
+  font: 400 11px/1 'IBM Plex Mono', monospace;
+  padding: 7px 10px;
+  border: 1px solid oklch(0.82 0.02 250);
+  background: white;
+  color: oklch(0.28 0.02 255);
+  outline: none;
+  cursor: pointer;
+}
+.invite-error {
+  margin-top: 8px;
+  font-size: 11px;
+  color: oklch(0.48 0.15 20);
+}
+
+/* ───────────────────────── Diagnostics Panel ──────────────────────────────── */
+.diag-bar {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  font: 600 10px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid oklch(0.88 0.015 250);
+}
+.diag-bar--ok {
+  color: oklch(0.46 0.12 155);
+  background: oklch(0.97 0.015 155);
+  border-bottom-color: oklch(0.84 0.06 155);
+}
+.diag-bar--warn {
+  color: oklch(0.48 0.12 78);
+  background: oklch(0.97 0.015 78);
+  border-bottom-color: oklch(0.84 0.08 78);
+}
+.diag-bar--error {
+  color: oklch(0.46 0.15 28);
+  background: oklch(0.97 0.015 28);
+  border-bottom-color: oklch(0.82 0.08 28);
+}
+
+.diag-list {
+  flex: 0 0 auto;
+  border-bottom: 1px solid oklch(0.88 0.015 250);
+}
+.diag-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 7px 14px;
+  border-bottom: 1px solid oklch(0.94 0.006 250);
+  font: 400 10.5px/1.4 "IBM Plex Mono", monospace;
+}
+.diag-item:last-child {
+  border-bottom: none;
+}
+.diag-item--warn {
+  color: oklch(0.44 0.1 78);
+}
+.diag-item--error {
+  color: oklch(0.42 0.14 28);
+}
+.diag-icon {
+  flex-shrink: 0;
+  font-size: 10px;
+}
+.diag-msg {
+  flex: 1;
+  line-height: 1.45;
+}
+
+/* ───────────────────────── Version History Panel ──────────────────────────── */
+.versions-panel {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid oklch(0.9 0.01 250);
+}
+.versions-head {
+  font: 600 8px/1 'IBM Plex Mono', monospace;
+  letter-spacing: 0.12em;
+  color: oklch(0.58 0.03 255);
+  margin-bottom: 10px;
+}
+.versions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.version-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid oklch(0.94 0.006 250);
+}
+.version-num {
+  font: 600 11px/1 'IBM Plex Mono', monospace;
+  color: oklch(0.38 0.08 255);
+  min-width: 28px;
+}
+.version-date {
+  font: 400 10px/1 'IBM Plex Mono', monospace;
+  color: oklch(0.6 0.02 255);
+  flex: 1;
+}
+.version-restore-btn {
+  font: 500 9px/1 'IBM Plex Mono', monospace;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border: 1px solid oklch(0.82 0.02 250);
+  background: oklch(0.97 0.004 245);
+  color: oklch(0.42 0.03 255);
+  cursor: pointer;
+}
+.version-restore-btn:hover {
+  background: oklch(0.94 0.01 250);
+}
+
+/* ─────────────────────────── Auth Pages ─────────────────────────────────────
+   Sign-in, Register, Reset — styled to match the blueprint aesthetic. */
+.auth-root {
+  min-height: 100vh;
+  background: oklch(0.985 0.004 245);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+
+.auth-box {
+  width: 100%;
+  max-width: 360px;
+  padding: 0 20px;
+}
+
+/* Brand -------------------------------------------------------------------- */
+.auth-brand {
+  text-align: center;
+  margin-bottom: 32px;
+}
+.auth-brand-link {
+  text-decoration: none;
+}
+.auth-brand-text {
+  display: block;
+  font: 700 11px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.18em;
+  color: oklch(0.38 0.08 255);
+}
+
+/* Form headings ------------------------------------------------------------ */
+.auth-form-head {
+  display: block;
+  font: 700 10px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.14em;
+  color: oklch(0.38 0.08 255);
+  margin-bottom: 18px;
+}
+
+/* Fields ------------------------------------------------------------------- */
+.auth-section {
+  margin: 0;
+}
+.auth-field {
+  margin-bottom: 12px;
+}
+.auth-label {
+  display: block;
+  font: 600 9px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.16em;
+  color: oklch(0.55 0.02 250);
+  margin-bottom: 5px;
+}
+.auth-input {
+  width: 100%;
+  border: 1px solid oklch(0.82 0.02 250);
+  background: oklch(0.99 0.003 245);
+  padding: 9px 11px;
+  font: 500 13px/1.3 "IBM Plex Sans", sans-serif;
+  color: oklch(0.28 0.02 255);
+  outline: none;
+  box-sizing: border-box;
+}
+.auth-input:focus {
+  border-color: oklch(0.6 0.1 255);
+}
+.auth-input--error {
+  border-color: oklch(0.6 0.12 20);
+}
+
+/* Submit button ------------------------------------------------------------ */
+.auth-submit {
+  display: block;
+  width: 100%;
+  font: 600 11px/1 "IBM Plex Mono", monospace;
+  padding: 11px 16px;
+  border: 1px solid oklch(0.3 0.02 255);
+  background: oklch(0.3 0.02 255);
+  color: oklch(0.99 0.003 245);
+  cursor: pointer;
+  margin-top: 16px;
+  margin-bottom: 8px;
+  text-align: center;
+}
+.auth-submit:hover:not(:disabled) {
+  background: oklch(0.24 0.02 255);
+  border-color: oklch(0.24 0.02 255);
+}
+.auth-submit:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Toggle links (forgot / register) ---------------------------------------- */
+.auth-links {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 0 10px;
+}
+.auth-link {
+  font: 500 10px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.5 0.1 255);
+  text-decoration: none;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.auth-link:hover {
+  color: oklch(0.35 0.12 255);
+}
+
+/* Errors ------------------------------------------------------------------- */
+.auth-errors {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+}
+.auth-error-item {
+  font: 400 11px/1.4 "IBM Plex Mono", monospace;
+  color: oklch(0.52 0.18 20);
+}
+.auth-auth-error {
+  margin-bottom: 10px;
+  text-align: center;
+  font: 400 11px/1.4 "IBM Plex Mono", monospace;
+  color: oklch(0.52 0.18 20);
+}
+
+/* Divider ------------------------------------------------------------------ */
+.auth-divider {
+  position: relative;
+  margin: 16px 0;
+}
+.auth-divider-hr {
+  border: none;
+  border-top: 1px solid oklch(0.88 0.01 250);
+}
+.auth-divider-label {
+  position: relative;
+  display: inline-block;
+  background: oklch(0.985 0.004 245);
+  padding: 0 10px;
+  font: 500 10px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.65 0.01 250);
+}
+
+/* Flash -------------------------------------------------------------------- */
+.auth-flash {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  width: 320px;
+  z-index: 500;
+  padding: 12px 14px;
+  font: 400 11.5px/1.4 "IBM Plex Mono", monospace;
+  border: 1px solid;
+}
+.auth-flash--info {
+  color: oklch(0.38 0.1 155);
+  background: oklch(0.96 0.025 155);
+  border-color: oklch(0.72 0.08 155);
+}
+.auth-flash--error {
+  color: oklch(0.42 0.15 20);
+  background: oklch(0.97 0.02 20);
+  border-color: oklch(0.72 0.1 20);
 }

@@ -15,6 +15,7 @@ defmodule Nspark.Accounts do
 
     resource Nspark.Accounts.Membership do
       define :memberships_for_user, action: :list_for_user, args: [:user_id]
+      define :members_for_org, action: :list_for_org, args: [:organization_id]
     end
 
     resource Nspark.Accounts.Invitation do
@@ -22,6 +23,7 @@ defmodule Nspark.Accounts do
       define :get_invitation_by_token, action: :get_by_token, args: [:token]
       define :accept_invitation, action: :accept, args: [:user_id]
       define :revoke_invitation, action: :revoke
+      define :pending_invitations_for_org, action: :list_pending_for_org, args: [:organization_id]
     end
   end
 end

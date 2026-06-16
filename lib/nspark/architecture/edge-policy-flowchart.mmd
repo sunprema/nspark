@@ -1,0 +1,50 @@
+flowchart TB
+subgraph at least one policy applies
+direction TB
+at_least_one_policy["action.type == :read
+or action.type == :create
+or action.type == :update
+or action.type == :destroy"]
+end
+at_least_one_policy--False-->Forbidden
+at_least_one_policy--True-->0_conditions
+subgraph Policy 1
+direction TB
+0_conditions{"action.type == :read"}
+0_checks_0{"actor has role >= viewer"}
+end
+0_conditions--True-->0_checks_0
+0_conditions--False-->1_conditions
+0_checks_0--True-->1_conditions
+0_checks_0--False-->Forbidden
+subgraph Policy 2
+direction TB
+1_conditions{"action.type == :create"}
+1_checks_0{"actor has role >= editor"}
+end
+1_conditions--True-->1_checks_0
+1_conditions--False-->2_conditions
+1_checks_0--True-->2_conditions
+1_checks_0--False-->Forbidden
+subgraph Policy 3
+direction TB
+2_conditions{"action.type == :update"}
+2_checks_0{"actor has role >= editor"}
+end
+2_conditions--True-->2_checks_0
+2_conditions--False-->3_conditions
+2_checks_0--True-->3_conditions
+2_checks_0--False-->Forbidden
+subgraph Policy 4
+direction TB
+3_conditions{"action.type == :destroy"}
+3_checks_0{"actor has role >= editor"}
+end
+3_conditions--True-->3_checks_0
+3_conditions--False-->Authorized
+3_checks_0--True-->Authorized
+3_checks_0--False-->Forbidden
+subgraph results[Results]
+Authorized([Authorized])
+Forbidden([Forbidden])
+end

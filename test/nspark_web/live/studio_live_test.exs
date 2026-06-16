@@ -13,7 +13,7 @@ defmodule NsparkWeb.StudioLiveTest do
     user = Ash.Seed.seed!(Nspark.Accounts.User, %{email: "studio_test@example.com"})
     Ash.create!(Membership, %{user_id: user.id, organization_id: org.id, role: :owner})
 
-    t = [tenant: org.id]
+    t = [tenant: org.id, authorize?: false]
     project = Ash.create!(Project, %{name: "P", status: :active}, t)
     graph = Ash.create!(Graph, %{name: "Agent Planner", project_id: project.id}, t)
     a = Ash.create!(Node, %{type: :persona, label: "A", graph_id: graph.id}, t)
@@ -53,7 +53,7 @@ defmodule NsparkWeb.StudioLiveTest do
     {:ok, view, _} = live(conn, "/studio")
     render_hook(view, "node_moved", %{"id" => a.id, "x" => 321, "y" => 123})
 
-    updated = Node |> filter(id == ^a.id) |> Ash.read_one!(tenant: org.id)
+    updated = Node |> filter(id == ^a.id) |> Ash.read_one!(tenant: org.id, authorize?: false)
     assert updated.metadata["position"] == %{"x" => 321, "y" => 123}
   end
 
@@ -67,12 +67,12 @@ defmodule NsparkWeb.StudioLiveTest do
     html = render(view)
     assert html =~ "Edited"
 
-    updated = Node |> filter(id == ^a.id) |> Ash.read_one!(tenant: org.id)
+    updated = Node |> filter(id == ^a.id) |> Ash.read_one!(tenant: org.id, authorize?: false)
     assert updated.label == "Edited"
     assert updated.content == "Use {x}"
 
     render_hook(view, "toggle_mute", %{})
-    reloaded = Node |> filter(id == ^a.id) |> Ash.read_one!(tenant: org.id)
+    reloaded = Node |> filter(id == ^a.id) |> Ash.read_one!(tenant: org.id, authorize?: false)
     assert reloaded.is_muted == true
   end
 
@@ -82,7 +82,7 @@ defmodule NsparkWeb.StudioLiveTest do
     render_hook(view, "select_node", %{"id" => a.id})
     render_hook(view, "update_node_content", %{"id" => a.id, "content" => "Use {inventory} now"})
 
-    updated = Node |> filter(id == ^a.id) |> Ash.read_one!(tenant: org.id)
+    updated = Node |> filter(id == ^a.id) |> Ash.read_one!(tenant: org.id, authorize?: false)
     assert updated.content == "Use {inventory} now"
 
     # the discovered variable surfaces in the rail explorer
@@ -109,6 +109,6 @@ defmodule NsparkWeb.StudioLiveTest do
     render_hook(view, "delete_node", %{"id" => a.id})
     assert render(view) =~ "1 nodes · 0 edges"
 
-    assert Edge |> Ash.read!(tenant: org.id) == []
+    assert Edge |> Ash.read!(tenant: org.id, authorize?: false) == []
   end
 end

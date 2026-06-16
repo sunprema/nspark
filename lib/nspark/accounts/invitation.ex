@@ -43,6 +43,13 @@ defmodule Nspark.Accounts.Invitation do
       filter expr(token == ^arg(:token))
     end
 
+    read :list_pending_for_org do
+      description "All pending invitations for an organization."
+      argument :organization_id, :uuid, allow_nil?: false
+      filter expr(organization_id == ^arg(:organization_id) and status == :pending)
+      prepare build(sort: [inserted_at: :desc])
+    end
+
     update :accept do
       description "Accept the invitation as the given user; creates a Membership."
       require_atomic? false

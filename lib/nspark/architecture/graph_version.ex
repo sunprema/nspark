@@ -7,7 +7,8 @@ defmodule Nspark.Architecture.GraphVersion do
   use Ash.Resource,
     otp_app: :nspark,
     domain: Nspark.Architecture,
-    data_layer: AshPostgres.DataLayer
+    data_layer: AshPostgres.DataLayer,
+    authorizers: [Ash.Policy.Authorizer]
 
   postgres do
     table "graph_versions"
@@ -21,6 +22,32 @@ defmodule Nspark.Architecture.GraphVersion do
 
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
+
+    read :list_for_graph do
+      argument :graph_id, :uuid, allow_nil?: false
+      filter expr(graph_id == ^arg(:graph_id))
+      prepare build(sort: [version_number: :desc])
+    end
+  end
+
+  policies do
+    policy action_type(:read) do
+      authorize_if {Nspark.Checks.HasRole, min_role: :viewer}
+    end
+
+    # Any editor can publish a graph snapshot.
+    policy action_type(:create) do
+      authorize_if {Nspark.Checks.HasRole, min_role: :editor}
+    end
+
+    policy action_type(:update) do
+      authorize_if {Nspark.Checks.HasRole, min_role: :admin}
+    end
+
+    # Versions are immutable snapshots; only owners may delete.
+    policy action_type(:destroy) do
+      authorize_if {Nspark.Checks.HasRole, min_role: :owner}
+    end
   end
 
   attributes do

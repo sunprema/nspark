@@ -50,13 +50,14 @@
   }
 
   let debounce;
+  let switching = false;
   function onUpdate(u) {
-    if (!u.docChanged) return;
+    if (!u.docChanged || switching) return;
     clearTimeout(debounce);
     const text = u.state.doc.toString();
     debounce = setTimeout(() => {
       if (currentId) live?.pushEvent("update_node_content", { id: currentId, content: text });
-    }, 500);
+    }, 1000);
   }
 
   const theme = EditorView.theme({
@@ -65,7 +66,9 @@
       backgroundColor: "oklch(0.99 0.004 245)",
       border: "1px solid oklch(0.82 0.02 250)",
       color: "oklch(0.34 0.02 255)",
+      height: "100%",
     },
+    ".cm-scroller": { overflow: "auto" },
     "&.cm-focused": { outline: "none", borderColor: "oklch(0.7 0.06 255)" },
     ".cm-content": {
       fontFamily: "'IBM Plex Mono', monospace",
@@ -104,13 +107,17 @@
   });
 
   // Swap the document when a different node is selected.
+  // The `switching` flag suppresses the spurious update_node_content that
+  // view.dispatch() would otherwise fire synchronously via onUpdate.
   $effect(() => {
     if (view && node_id !== currentId) {
       currentId = node_id;
       clearTimeout(debounce);
+      switching = true;
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: content },
       });
+      switching = false;
     }
   });
 </script>
@@ -119,6 +126,9 @@
 
 <style>
   .cm-host {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
   }
 </style>

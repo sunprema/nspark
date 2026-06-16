@@ -5,7 +5,8 @@ defmodule Nspark.Registry.MemoryTemplate do
   use Ash.Resource,
     otp_app: :nspark,
     domain: Nspark.Registry,
-    data_layer: AshPostgres.DataLayer
+    data_layer: AshPostgres.DataLayer,
+    authorizers: [Ash.Policy.Authorizer]
 
   postgres do
     table "memory_templates"
@@ -19,6 +20,24 @@ defmodule Nspark.Registry.MemoryTemplate do
 
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
+  end
+
+  policies do
+    policy action_type(:read) do
+      authorize_if {Nspark.Checks.HasRole, min_role: :viewer}
+    end
+
+    policy action_type(:create) do
+      authorize_if {Nspark.Checks.HasRole, min_role: :editor}
+    end
+
+    policy action_type(:update) do
+      authorize_if {Nspark.Checks.HasRole, min_role: :editor}
+    end
+
+    policy action_type(:destroy) do
+      authorize_if {Nspark.Checks.HasRole, min_role: :admin}
+    end
   end
 
   attributes do

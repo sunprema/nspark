@@ -1,0 +1,16 @@
+flowchart TB
+subgraph at least one policy applies
+direction TB
+at_least_one_policy["AshAuthentication is performing this interaction"]
+end
+at_least_one_policy--False-->Forbidden
+at_least_one_policy--True-->0_conditions
+subgraph Policy 1[AshAuthentication can interact with the token resource]
+direction TB
+0_conditions{"AshAuthentication is performing this interaction"}
+end
+subgraph results[Results]
+Authorized([Authorized])
+Forbidden([Forbidden])
+end
+0_conditions---->Authorized

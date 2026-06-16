@@ -25,6 +25,8 @@
   class="bp-node"
   class:muted={data.muted}
   class:selected
+  class:diag-warning={data.diagnostic === "warning"}
+  class:diag-error={data.diagnostic === "error"}
   style="--spine:{spine}; --label:{label};"
 >
   <Handle type="target" position={Position.Top} />
@@ -91,5 +93,15 @@
     text-decoration: line-through;
     text-decoration-color: oklch(0.78 0.012 250);
     color: oklch(0.66 0.012 250);
+  }
+
+  .bp-node.diag-warning {
+    border-color: oklch(0.72 0.1 78);
+    background: oklch(0.99 0.008 78);
+  }
+
+  .bp-node.diag-error {
+    border-color: oklch(0.65 0.14 28);
+    background: oklch(0.99 0.008 28);
   }
 </style>

@@ -22,6 +22,13 @@ defmodule Nspark.Accounts.Membership do
       argument :user_id, :uuid, allow_nil?: false
       filter expr(user_id == ^arg(:user_id))
     end
+
+    read :list_for_org do
+      description "All memberships for an organization (members management screen)."
+      argument :organization_id, :uuid, allow_nil?: false
+      filter expr(organization_id == ^arg(:organization_id))
+      prepare build(load: [:user], sort: [inserted_at: :asc])
+    end
   end
 
   attributes do
