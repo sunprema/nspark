@@ -22,19 +22,35 @@ defmodule NsparkWeb.Api.GraphController do
         {graph, org_id} ->
           opts = [tenant: org_id, actor: user]
           nodes = Node |> filter(graph_id == ^graph.id) |> sort(inserted_at: :asc) |> Ash.read!(opts)
-          compiled = Nspark.Compiler.compile(nodes)
+          resolution = Nspark.Registry.resolve_skills(nodes, opts)
 
-          json(conn, %{
-            graph_id: graph.id,
-            graph_name: graph.name,
-            graph_version: graph.graph_version,
-            compiled: %{
-              markdown: compiled.markdown,
-              token_estimate: compiled.token_estimate,
-              included: compiled.included,
-              excluded: compiled.excluded
-            }
-          })
+          if resolution.problems != [] do
+            conn
+            |> put_status(422)
+            |> json(%{
+              error: "unresolved_skills",
+              unresolved:
+                Enum.map(resolution.problems, fn p ->
+                  %{node_id: p.node_id, source_asset_id: p.source_asset_id, reason: p.reason}
+                end)
+            })
+          else
+            compiled =
+              Nspark.Compiler.compile(resolution.nodes, [], resolved_assets: resolution.manifest)
+
+            json(conn, %{
+              graph_id: graph.id,
+              graph_name: graph.name,
+              graph_version: graph.graph_version,
+              compiled: %{
+                markdown: compiled.markdown,
+                token_estimate: compiled.token_estimate,
+                included: compiled.included,
+                excluded: compiled.excluded,
+                resolved_skills: compiled.resolved_assets
+              }
+            })
+          end
       end
     end
   end

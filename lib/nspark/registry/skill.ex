@@ -30,7 +30,42 @@ defmodule Nspark.Registry.Skill do
   end
 
   actions do
-    defaults [:read, :destroy, create: :*, update: :*]
+    defaults [:read, :destroy]
+
+    create :create do
+      primary? true
+      accept [:name, :description, :content]
+      change set_attribute(:status, :draft)
+      change relate_actor(:created_by, allow_nil?: true)
+      change relate_actor(:updated_by, allow_nil?: true)
+    end
+
+    # Editors edit Skill *content* but cannot change its lifecycle status/version.
+    update :update do
+      primary? true
+      accept [:name, :description, :content]
+      require_atomic? false
+      change relate_actor(:updated_by, allow_nil?: true)
+    end
+
+    # Admin-only: promote to a new published version (integer-bump versioning).
+    update :publish do
+      description "Promote the Skill to a new published version."
+      accept []
+      require_atomic? false
+      change set_attribute(:status, :published)
+      change increment(:version)
+      change relate_actor(:updated_by, allow_nil?: true)
+    end
+
+    # Admin-only: retire the Skill. Deprecated Skills fail graph resolution.
+    update :archive do
+      description "Deprecate the Skill."
+      accept []
+      require_atomic? false
+      change set_attribute(:status, :deprecated)
+      change relate_actor(:updated_by, allow_nil?: true)
+    end
   end
 
   policies do
@@ -44,6 +79,12 @@ defmodule Nspark.Registry.Skill do
 
     policy action_type(:update) do
       authorize_if {Nspark.Checks.HasRole, min_role: :editor}
+    end
+
+    # publish/archive are update actions, so the editor policy above also applies;
+    # this additional policy ANDs an admin requirement onto just those two.
+    policy action([:publish, :archive]) do
+      authorize_if {Nspark.Checks.HasRole, min_role: :admin}
     end
 
     policy action_type(:destroy) do
@@ -85,6 +126,16 @@ defmodule Nspark.Registry.Skill do
   relationships do
     belongs_to :organization, Nspark.Accounts.Organization do
       allow_nil? false
+    end
+
+    belongs_to :created_by, Nspark.Accounts.User do
+      domain Nspark.Accounts
+      allow_nil? true
+    end
+
+    belongs_to :updated_by, Nspark.Accounts.User do
+      domain Nspark.Accounts
+      allow_nil? true
     end
   end
 end

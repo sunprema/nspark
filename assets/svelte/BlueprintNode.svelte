@@ -56,6 +56,7 @@
   class="bp-node"
   class:muted={data.muted}
   class:selected
+  class:linked={data.linked}
   class:conditional={isConditional}
   class:diag-warning={data.diagnostic === "warning"}
   class:diag-error={data.diagnostic === "error"}
@@ -224,6 +225,16 @@
   }
   .bp-node.muted .bp-content {
     opacity: 0.45;
+  }
+
+  /* Linked-to-registry state: content is managed in the Skill registry */
+  .bp-node.linked {
+    background: oklch(0.985 0.012 255);
+    border-color: oklch(0.8 0.05 255);
+    border-left-style: dashed;
+  }
+  .bp-node.linked .bp-label {
+    color: oklch(0.34 0.05 255);
   }
 
   /* Conditional node: amber dashed top + tinted bg */

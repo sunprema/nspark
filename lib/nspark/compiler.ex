@@ -36,7 +36,8 @@ defmodule Nspark.Compiler do
           cost_estimate: float(),
           provider: provider(),
           included: non_neg_integer(),
-          excluded: non_neg_integer()
+          excluded: non_neg_integer(),
+          resolved_assets: [map()]
         }
 
   @doc """
@@ -44,6 +45,9 @@ defmodule Nspark.Compiler do
 
   Options:
   - `:provider` — `:anthropic` (default), `:openai`, or `:gemini`
+  - `:resolved_assets` — manifest of Registry assets already resolved into the
+    nodes (see `Nspark.Registry.resolve_skills/2`); echoed into the result so
+    the compiler output reports which asset versions it assembled.
 
   Edges (optional) are used to topologically order nodes within each section.
   Both Ash resource structs and plain string-keyed maps (from snapshots) are
@@ -52,6 +56,7 @@ defmodule Nspark.Compiler do
   @spec compile([map()], [map()], keyword()) :: result()
   def compile(nodes, edges \\ [], opts \\ []) do
     provider = Keyword.get(opts, :provider, :anthropic)
+    resolved_assets = Keyword.get(opts, :resolved_assets, [])
     active = Enum.reject(nodes, & &1.is_muted)
     cond_contexts = build_conditional_contexts(active, edges)
 
@@ -81,7 +86,8 @@ defmodule Nspark.Compiler do
       cost_estimate: Float.round(cost_estimate, 6),
       provider: provider,
       included: length(active),
-      excluded: length(nodes) - length(active)
+      excluded: length(nodes) - length(active),
+      resolved_assets: resolved_assets
     }
   end
 

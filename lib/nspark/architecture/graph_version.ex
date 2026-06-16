@@ -68,6 +68,15 @@ defmodule Nspark.Architecture.GraphVersion do
       public? true
     end
 
+    # Manifest of Registry assets resolved into `graph_snapshot` at publish time
+    # (`[%{id, name, version}]`). With content frozen in the snapshot, this records
+    # *which* Skill versions a deployment pins — for audit, impact, and rollback.
+    attribute :resolved_skills, {:array, :map} do
+      allow_nil? false
+      default []
+      public? true
+    end
+
     # Loose reference to the authoring user. Promoted to a managed relationship
     # once User<->Organization membership is formalized.
     attribute :author_id, :uuid do

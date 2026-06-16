@@ -34,6 +34,7 @@ defmodule NsparkWeb.StudioLive do
     {:ok,
      socket
      |> assign(:org_id, socket.assigns.current_org.id)
+     |> assign(:current_role, current_role(socket.assigns.current_user, socket.assigns.current_org.id))
      # graph canvas state — populated by handle_params
      |> assign(:graph, nil)
      |> assign(:nodes, [])
@@ -42,7 +43,7 @@ defmodule NsparkWeb.StudioLive do
      |> assign(:edges, [])
      |> assign(:edge_count, 0)
      |> assign(:variables, [])
-     |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0, cost_estimate: 0.0, provider: :anthropic})
+     |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0, cost_estimate: 0.0, provider: :anthropic, resolved_assets: []})
      |> assign(:compiled_html, "")
      |> assign(:selected, nil)
      |> assign(:graph_dirty, false)
@@ -65,6 +66,15 @@ defmodule NsparkWeb.StudioLive do
      |> assign(:new_graph_name, "")
      |> assign(:new_graph_description, "")
      |> assign(:show_deploy_modal, false)
+     |> assign(:show_skill_modal, false)
+     |> assign(:skill_detail, nil)
+     |> assign(:show_new_skill_modal, false)
+     |> assign(:new_skill_name, "")
+     |> assign(:new_skill_description, "")
+     |> assign(:new_skill_content, "")
+     |> assign(:skill_suggestions, [])
+     |> assign(:show_suggestions_modal, false)
+     |> assign(:zen, nil)
      |> assign(:compiler_view, :rendered)
      |> assign(:selected_provider, :anthropic)
      # architect
@@ -84,10 +94,34 @@ defmodule NsparkWeb.StudioLive do
       |> assign(:all_graphs, all_graphs)
       |> assign(:show_agent_picker, false)
       |> assign(:graph_search, "")
+      |> assign(:zen, zen_mode(params["zen"]))
       |> load_from_params(params, all_graphs)
       |> load_registry()
 
     {:noreply, socket}
+  end
+
+  # ── zen view (fullscreen canvas / compiler) ──────────────────────────────────
+  #
+  # Zen state is driven entirely by the `zen` query param so the Svelte canvas
+  # stays mounted in place — CSS on `.studio` hides the surrounding chrome rather
+  # than re-rendering the canvas into a new container (which would reset zoom).
+
+  defp zen_mode("canvas"), do: :canvas
+  defp zen_mode("compiler"), do: :compiler
+  defp zen_mode(_), do: nil
+
+  defp zen_path(socket, mode) do
+    base = if socket.assigns.graph, do: ~p"/studio/#{socket.assigns.graph.id}", else: ~p"/studio"
+    if mode, do: "#{base}?zen=#{mode}", else: base
+  end
+
+  def handle_event("enter_zen", %{"mode" => mode}, socket) when mode in ["canvas", "compiler"] do
+    {:noreply, push_patch(socket, to: zen_path(socket, mode))}
+  end
+
+  def handle_event("exit_zen", _params, socket) do
+    {:noreply, push_patch(socket, to: zen_path(socket, nil))}
   end
 
   # ── agent picker ────────────────────────────────────────────────────────────
@@ -344,7 +378,9 @@ defmodule NsparkWeb.StudioLive do
                opts
              ) do
           {:ok, skill} ->
-            _ = Ash.update!(node, %{source_asset_id: skill.id}, opts)
+            # The node becomes a content-less linked node; the Skill is now the
+            # single source of truth and is resolved at compile time.
+            _ = Ash.update!(node, %{source_asset_id: skill.id, content: nil}, opts)
 
             {:noreply,
              socket
@@ -361,14 +397,148 @@ defmodule NsparkWeb.StudioLive do
     end
   end
 
+  def handle_event("inspect_skill", %{"skill_id" => id}, socket) do
+    opts = ash_opts(socket)
+
+    case Ash.get(Nspark.Registry.Skill, id, opts) do
+      {:ok, skill} ->
+        usage = Nspark.Registry.skill_usage(id, opts)
+
+        {:noreply,
+         assign(socket, show_skill_modal: true, skill_detail: %{skill: skill, usage: usage})}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Skill not found.")}
+    end
+  end
+
+  def handle_event("close_skill_modal", _params, socket) do
+    {:noreply, assign(socket, :show_skill_modal, false)}
+  end
+
+  def handle_event("publish_skill", %{"skill_id" => id}, socket),
+    do: transition_skill(socket, id, :publish, "published")
+
+  def handle_event("archive_skill", %{"skill_id" => id}, socket),
+    do: transition_skill(socket, id, :archive, "archived")
+
+  # ── registry suggestions (refactor duplicates → shared skill) ────────────────
+
+  def handle_event("open_suggestions", _params, socket) do
+    {:noreply, assign(socket, :show_suggestions_modal, true)}
+  end
+
+  def handle_event("close_suggestions", _params, socket) do
+    {:noreply, assign(socket, :show_suggestions_modal, false)}
+  end
+
+  def handle_event("extract_shared_skill", %{"signature" => signature}, socket) do
+    opts = ash_opts(socket)
+
+    case Enum.find(socket.assigns.skill_suggestions, &(&1.signature == signature)) do
+      nil ->
+        {:noreply, socket}
+
+      group ->
+        case Ash.create(Nspark.Registry.Skill, %{name: group.label, content: group.content}, opts) do
+          {:ok, skill} ->
+            # Link every duplicate node (across graphs) to the new Skill and drop
+            # its copied content — the Skill is now the single source of truth.
+            Enum.each(group.node_ids, fn node_id ->
+              case Ash.get(Node, node_id, opts) do
+                {:ok, node} -> Ash.update!(node, %{source_asset_id: skill.id, content: nil}, opts)
+                _ -> :ok
+              end
+            end)
+
+            {:noreply,
+             socket
+             |> load_registry()
+             |> refresh()
+             |> then(fn s -> assign(s, :show_suggestions_modal, s.assigns.skill_suggestions != []) end)
+             |> put_flash(:info, "Extracted Skill \"#{skill.name}\" — linked #{group.count} nodes across #{length(group.graphs)} graph(s).")}
+
+          {:error, %Ash.Error.Forbidden{}} ->
+            {:noreply, put_flash(socket, :error, "You need editor access to extract skills.")}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "Could not extract skill.")}
+        end
+    end
+  end
+
+  # ── new skill modal ──────────────────────────────────────────────────────────
+
+  def handle_event("open_new_skill_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_new_skill_modal, true)
+     |> assign(:new_skill_name, "")
+     |> assign(:new_skill_description, "")
+     |> assign(:new_skill_content, "")}
+  end
+
+  def handle_event("close_new_skill_modal", _params, socket) do
+    {:noreply, assign(socket, :show_new_skill_modal, false)}
+  end
+
+  def handle_event("new_skill_change", params, socket) do
+    {:noreply,
+     socket
+     |> assign(:new_skill_name, Map.get(params, "name", ""))
+     |> assign(:new_skill_description, Map.get(params, "description", ""))
+     |> assign(:new_skill_content, Map.get(params, "content", ""))}
+  end
+
+  def handle_event("create_skill", params, socket) do
+    name = params |> Map.get("name", "") |> String.trim()
+
+    if name == "" do
+      {:noreply, socket}
+    else
+      attrs = %{
+        name: name,
+        description: blank_to_nil(Map.get(params, "description", "")),
+        content: Map.get(params, "content", "")
+      }
+
+      case Ash.create(Nspark.Registry.Skill, attrs, ash_opts(socket)) do
+        {:ok, skill} ->
+          {:noreply,
+           socket
+           |> assign(:show_new_skill_modal, false)
+           |> load_registry()
+           |> put_flash(:info, "Created Skill \"#{skill.name}\" (draft).")}
+
+        {:error, %Ash.Error.Forbidden{}} ->
+          {:noreply, put_flash(socket, :error, "You need editor access to create skills.")}
+
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, "Could not create skill.")}
+      end
+    end
+  end
+
   def handle_event("detach_node", _params, socket) do
     case socket.assigns.selected do
       nil ->
         {:noreply, socket}
 
       node ->
-        _ = Ash.update!(node, %{source_asset_id: nil}, ash_opts(socket))
-        {:noreply, socket |> refresh() |> put_flash(:info, "Node detached from registry.")}
+        # Detach = clone: copy the currently-resolved content into the node so it
+        # becomes a usable standalone node rather than an empty one.
+        content = resolved_content_for(node, socket.assigns.registry_items)
+        _ = Ash.update!(node, %{source_asset_id: nil, content: content}, ash_opts(socket))
+        {:noreply, socket |> refresh() |> put_flash(:info, "Node detached — content copied from the Skill.")}
+    end
+  end
+
+  defp resolved_content_for(%{source_asset_id: nil} = node, _items), do: node.content
+
+  defp resolved_content_for(%{source_asset_id: id} = node, items) do
+    case Enum.find(items, &(&1.id == id)) do
+      %{content: content} -> content
+      _ -> node.content
     end
   end
 
@@ -483,6 +653,14 @@ defmodule NsparkWeb.StudioLive do
          |> assign(:graph_dirty, false)
          |> load_versions()
          |> put_flash(:info, "Published v#{version.version_number}")}
+
+      {:error, {:unresolved_skills, problems}} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Can't publish: #{length(problems)} linked Skill#{if length(problems) > 1, do: "s"} could not be resolved. Fix the highlighted nodes first."
+         )}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Publish failed: #{inspect(reason)}")}
@@ -698,7 +876,7 @@ defmodule NsparkWeb.StudioLive do
       |> assign(:flow_edges, [])
       |> assign(:edge_count, 0)
       |> assign(:variables, [])
-      |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0, cost_estimate: 0.0, provider: :anthropic})
+      |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0, cost_estimate: 0.0, provider: :anthropic, resolved_assets: []})
       |> assign(:compiled_html, "")
       |> assign(:selected, nil)
       |> assign(:graph_dirty, false)
@@ -723,17 +901,33 @@ defmodule NsparkWeb.StudioLive do
 
     edges = Edge |> filter(graph_id == ^graph.id) |> Ash.read!(opts)
 
-    compiled = Nspark.Compiler.compile(nodes, edges, provider: provider)
-    node_order = Nspark.Compiler.node_order(nodes, edges)
-    diagnostics = Nspark.Diagnostics.run(nodes, edges)
+    # Resolve linked Skill nodes from the Registry before compiling so the graph
+    # is the single source of truth (Knowledge Layer, plan Phase 2). Compile,
+    # ordering, diagnostics, and variable analysis all run over resolved content;
+    # `nodes` stays the raw set so the inspector still edits the real records.
+    resolution = Nspark.Registry.resolve_skills(nodes, opts)
+    resolved_nodes = resolution.nodes
+
+    compiled =
+      Nspark.Compiler.compile(resolved_nodes, edges,
+        provider: provider,
+        resolved_assets: resolution.manifest
+      )
+
+    node_order = Nspark.Compiler.node_order(resolved_nodes, edges)
+
+    diagnostics =
+      Nspark.Registry.resolution_diagnostics(resolution.problems) ++
+        Nspark.Diagnostics.run(resolved_nodes, edges)
+
     node_diagnostics = build_node_diagnostics(diagnostics)
-    var_node_ids = var_node_ids_for(socket.assigns[:selected_variable], nodes)
-    parallel_ids = parallel_agent_ids(nodes, edges)
+    var_node_ids = var_node_ids_for(socket.assigns[:selected_variable], resolved_nodes)
+    parallel_ids = parallel_agent_ids(resolved_nodes, edges)
 
     {var_producers, var_consumers} =
       case socket.assigns[:selected_variable] do
         nil -> {[], []}
-        name -> compute_variable_info(name, nodes)
+        name -> compute_variable_info(name, resolved_nodes)
       end
 
     socket
@@ -742,7 +936,7 @@ defmodule NsparkWeb.StudioLive do
     |> assign(:flow_nodes, to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order, parallel_ids))
     |> assign(:flow_edges, to_flow_edges(edges))
     |> assign(:edge_count, length(edges))
-    |> assign(:variables, variables_in(nodes))
+    |> assign(:variables, variables_in(resolved_nodes))
     |> assign(:compiled, compiled)
     |> assign(:compiled_html, render_compiled(compiled.markdown))
     |> assign(:diagnostics, diagnostics)
@@ -805,6 +999,60 @@ defmodule NsparkWeb.StudioLive do
   defp format_cost(c) when c < 0.001, do: "<$0.001"
   defp format_cost(c), do: "$#{:erlang.float_to_binary(c, decimals: 4)}"
 
+  defp resolved_assets_title(assets) do
+    "Resolved skills: " <> Enum.map_join(assets, ", ", &"#{&1.name} v#{&1.version}")
+  end
+
+  # Manifest read back from JSONB has string keys.
+  defp version_skills_title(skills) do
+    "Pinned skills: " <>
+      Enum.map_join(skills, ", ", fn s ->
+        "#{s["name"] || s[:name]} v#{s["version"] || s[:version]}"
+      end)
+  end
+
+  defp current_role(user, org_id) do
+    user.id
+    |> Nspark.Accounts.memberships_for_user!()
+    |> Enum.find_value(fn m -> if m.organization_id == org_id, do: m.role end)
+  end
+
+  defp admin_role?(role), do: role in [:admin, :owner]
+
+  defp transition_skill(socket, id, action, verb) do
+    opts = ash_opts(socket)
+
+    with {:ok, skill} <- Ash.get(Nspark.Registry.Skill, id, opts),
+         {:ok, updated} <- Ash.update(skill, %{}, Keyword.put(opts, :action, action)) do
+      {:noreply,
+       socket
+       |> load_registry()
+       |> assign(:skill_detail, %{skill: updated, usage: Nspark.Registry.skill_usage(id, opts)})
+       |> put_flash(:info, "Skill #{verb}.")}
+    else
+      {:error, %Ash.Error.Forbidden{}} ->
+        {:noreply, put_flash(socket, :error, "Only admins can #{action} skills.")}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Could not #{action} skill.")}
+    end
+  end
+
+  defp skill_publish_confirm(%{skill: s, usage: u}) do
+    "Publish v#{s.version + 1} of \"#{s.name}\"? Affects #{length(u.graphs)} graph(s) and " <>
+      "#{length(u.deployments)} live deployment(s). Deployments keep their pinned version " <>
+      "until each graph is re-published."
+  end
+
+  defp usage_summary(%{graphs: graphs, deployments: deployments}) do
+    graphs_text = "Used in #{length(graphs)} graph(s): " <> Enum.map_join(graphs, ", ", & &1.name)
+
+    case deployments do
+      [] -> graphs_text
+      ds -> graphs_text <> " · #{length(ds)} deployment(s)"
+    end
+  end
+
   defp diag_summary([]), do: {:ok, 0, 0}
   defp diag_summary(diags) do
     errors = Enum.count(diags, &(&1.level == :error))
@@ -830,13 +1078,22 @@ defmodule NsparkWeb.StudioLive do
     end
   end
 
+  defp blank_to_nil(value) do
+    case String.trim(value || "") do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
   defp load_registry(socket) do
     opts = ash_opts(socket)
 
     alias Nspark.Registry.{Skill, Policy, Schema, MemoryTemplate, Package}
 
+    usage = Nspark.Registry.skill_usage_index(opts)
+
     items =
-      Enum.map(Ash.read!(Skill, opts), &to_registry_item(&1, :skill)) ++
+      Enum.map(Ash.read!(Skill, opts), &to_registry_item(&1, :skill, Map.get(usage, &1.id))) ++
       Enum.map(Ash.read!(Policy, opts), &to_registry_item(&1, :policy)) ++
       Enum.map(Ash.read!(Schema, opts), &to_registry_item(&1, :schema)) ++
       Enum.map(Ash.read!(MemoryTemplate, opts), &to_registry_item(&1, :memory_template))
@@ -846,16 +1103,18 @@ defmodule NsparkWeb.StudioLive do
     socket
     |> assign(:registry_items, items)
     |> assign(:packages, packages)
+    |> assign(:skill_suggestions, Nspark.Registry.duplicate_skill_candidates(opts))
   end
 
-  defp to_registry_item(resource, asset_type) do
+  defp to_registry_item(resource, asset_type, usage \\ nil) do
     %{
       id: resource.id,
       name: resource.name,
       description: resource.description,
       content: resource.content,
       status: resource.status,
-      asset_type: asset_type
+      asset_type: asset_type,
+      usage: usage
     }
   end
 
@@ -878,7 +1137,10 @@ defmodule NsparkWeb.StudioLive do
         %{
           type: registry_node_type(asset_type),
           label: item.name,
-          content: item.content,
+          # Linked Skill nodes own no content — it's resolved from the Skill at
+          # compile time. Other linked asset types still carry a content copy
+          # (they have no resolver yet; out of scope this phase).
+          content: if(asset_type == "skill", do: nil, else: item.content),
           source_asset_id: asset_id,
           graph_id: socket.assigns.graph.id,
           metadata: %{"position" => pos}
@@ -1137,7 +1399,22 @@ defmodule NsparkWeb.StudioLive do
   def render(assigns) do
     ~H"""
     <Layouts.workspace flash={@flash}>
-      <div class="studio">
+      <div
+        :if={@zen}
+        id="zen-escape"
+        phx-window-keydown="exit_zen"
+        phx-key="Escape"
+        style="display: none;"
+      >
+      </div>
+      <button :if={@zen} type="button" phx-click="exit_zen" class="zen-exit">
+        Esc ⤶ Exit Zen
+      </button>
+      <div class={[
+        "studio",
+        @zen == :canvas && "studio--zen-canvas",
+        @zen == :compiler && "studio--zen-compiler"
+      ]}>
         <div class="studio-bar">
           <div class="studio-mark"><span></span></div>
           <div class="studio-title">Newtonian&nbsp;Spark</div>
@@ -1282,7 +1559,12 @@ defmodule NsparkWeb.StudioLive do
               </div>
             <% end %>
 
-            <div class="rail-head rail-head--mt">REGISTRY</div>
+            <div class="rail-head rail-head--mt rail-head--row">
+              <span>REGISTRY</span>
+              <button type="button" phx-click="open_new_skill_modal" class="rail-add-btn" title="Create a new Skill">
+                + New Skill
+              </button>
+            </div>
             <input
               type="text"
               value={@registry_search}
@@ -1291,6 +1573,15 @@ defmodule NsparkWeb.StudioLive do
               placeholder="Search…"
               class="rail-search"
             />
+            <button
+              :if={@skill_suggestions != []}
+              type="button"
+              phx-click="open_suggestions"
+              class="reg-suggest-banner"
+              title="Duplicated logic found across graphs"
+            >
+              ✦ {length(@skill_suggestions)} reusable pattern{if length(@skill_suggestions) > 1, do: "s"} found — review
+            </button>
             <% reg_filtered = filter_registry(@registry_items, @registry_search) %>
             <div :if={@registry_items == [] && @packages == []} class="rail-hint">No registry assets yet</div>
             <div :if={@registry_items != [] && reg_filtered == [] && @packages == []} class="rail-hint">No matches</div>
@@ -1298,25 +1589,39 @@ defmodule NsparkWeb.StudioLive do
               <% group = Enum.filter(reg_filtered, &(&1.asset_type == group_type)) %>
               <%= if group != [] do %>
                 <div class="reg-group-label">{registry_group_label(group_type)}</div>
-                <button
-                  :for={item <- group}
-                  id={"reg-#{item.id}"}
-                  type="button"
-                  class={["reg-item", item.status == :deprecated && "reg-item--deprecated"]}
-                  draggable="true"
-                  phx-hook="DragRegistryAsset"
-                  data-asset-id={item.id}
-                  data-asset-type={Atom.to_string(item.asset_type)}
-                  phx-click="add_registry_node"
-                  phx-value-asset_id={item.id}
-                  phx-value-asset_type={Atom.to_string(item.asset_type)}
-                  title={"#{item.name}#{if item.description, do: " — #{item.description}", else: ""}"}
-                  disabled={is_nil(@graph)}
-                >
-                  <span class="reg-swatch" style={"background: oklch(0.55 0.13 #{registry_hue(group_type)});"}></span>
-                  <span class="reg-name">{item.name}</span>
-                  <span class="reg-badge">{item.status}</span>
-                </button>
+                <div :for={item <- group} class="reg-row">
+                  <button
+                    id={"reg-#{item.id}"}
+                    type="button"
+                    class={["reg-item", item.status == :deprecated && "reg-item--deprecated"]}
+                    draggable="true"
+                    phx-hook="DragRegistryAsset"
+                    data-asset-id={item.id}
+                    data-asset-type={Atom.to_string(item.asset_type)}
+                    phx-click="add_registry_node"
+                    phx-value-asset_id={item.id}
+                    phx-value-asset_type={Atom.to_string(item.asset_type)}
+                    title={"#{item.name}#{if item.description, do: " — #{item.description}", else: ""}"}
+                    disabled={is_nil(@graph)}
+                  >
+                    <span class="reg-swatch" style={"background: oklch(0.55 0.13 #{registry_hue(group_type)});"}></span>
+                    <span class="reg-name">{item.name}</span>
+                    <span
+                      :if={item.usage && item.usage.graphs != []}
+                      class="reg-usage"
+                      title={usage_summary(item.usage)}
+                    >▦ {length(item.usage.graphs)}</span>
+                    <span class="reg-badge">{item.status}</span>
+                  </button>
+                  <button
+                    :if={item.asset_type == :skill}
+                    type="button"
+                    class="reg-inspect"
+                    phx-click="inspect_skill"
+                    phx-value-skill_id={item.id}
+                    title="View usage & impact"
+                  >ⓘ</button>
+                </div>
               <% end %>
             <% end %>
             <%= if @packages != [] do %>
@@ -1339,6 +1644,16 @@ defmodule NsparkWeb.StudioLive do
           </aside>
 
           <main class="studio-canvas">
+            <button
+              :if={@graph}
+              type="button"
+              phx-click="enter_zen"
+              phx-value-mode="canvas"
+              class="zen-btn"
+              title="Zen view — fullscreen canvas (Esc to exit)"
+            >
+              ⛶ Zen
+            </button>
             <%= if @graph do %>
               <.svelte
                 name="GraphCanvas"
@@ -1445,45 +1760,79 @@ defmodule NsparkWeb.StudioLive do
                     </button>
                   </div>
                 <% else %>
-                  <div class="insp-field-label">INSTRUCTION · MARKDOWN</div>
-                  <.svelte
-                    name="CodeEditor"
-                    id="studio-code-editor"
-                    props={%{
-                      node_id: @selected.id,
-                      content: @selected.content || "",
-                      variables: @variables
-                    }}
-                    socket={@socket}
-                    ssr={false}
-                  />
-
-                  <div class="insp-toggle">
-                    <span>Include in compile</span>
-                    <button
-                      type="button"
-                      phx-click="toggle_mute"
-                      class={["insp-pill", @selected.is_muted && "insp-pill--off"]}
-                    >
-                      {if @selected.is_muted, do: "MUTED", else: "ON"}
-                    </button>
-                  </div>
-
-                  <%!-- Registry link info + actions --%>
                   <% linked_asset = @selected.source_asset_id && Enum.find(@registry_items, &(&1.id == @selected.source_asset_id)) %>
-                  <%= if linked_asset do %>
-                    <div class="insp-linked">
-                      <span class="insp-linked-badge">{registry_type_label(linked_asset.asset_type)}</span>
-                      <span class="insp-linked-name">{linked_asset.name}</span>
-                      <button type="button" phx-click="detach_node" class="insp-detach-btn">
-                        Detach
+                  <%= if @selected.type == :skill && linked_asset do %>
+                    <%!-- Linked Skill: content is managed in the Registry, read-only here --%>
+                    <div class="insp-managed">
+                      <span class="insp-managed-badge">⟳ MANAGED BY REGISTRY</span>
+                      <button
+                        type="button"
+                        phx-click="inspect_skill"
+                        phx-value-skill_id={linked_asset.id}
+                        class="insp-open-skill"
+                      >
+                        Open “{linked_asset.name}” ↗
                       </button>
                     </div>
-                  <% end %>
-                  <%= if @selected.type == :skill && is_nil(@selected.source_asset_id) do %>
-                    <button type="button" phx-click="convert_to_skill" class="insp-convert-btn">
-                      → Save as Skill
-                    </button>
+                    <div class="insp-field-label">RESOLVED CONTENT · READ-ONLY</div>
+                    <div class="insp-readonly">{linked_asset.content || "(this Skill has no content yet)"}</div>
+
+                    <div class="insp-toggle">
+                      <span>Include in compile</span>
+                      <button
+                        type="button"
+                        phx-click="toggle_mute"
+                        class={["insp-pill", @selected.is_muted && "insp-pill--off"]}
+                      >
+                        {if @selected.is_muted, do: "MUTED", else: "ON"}
+                      </button>
+                    </div>
+
+                    <div class="insp-linked">
+                      <button type="button" phx-click="detach_node" class="insp-detach-btn">
+                        Detach &amp; edit locally
+                      </button>
+                    </div>
+                  <% else %>
+                    <div class="insp-field-label">INSTRUCTION · MARKDOWN</div>
+                    <.svelte
+                      name="CodeEditor"
+                      id="studio-code-editor"
+                      props={%{
+                        node_id: @selected.id,
+                        content: @selected.content || "",
+                        variables: @variables
+                      }}
+                      socket={@socket}
+                      ssr={false}
+                    />
+
+                    <div class="insp-toggle">
+                      <span>Include in compile</span>
+                      <button
+                        type="button"
+                        phx-click="toggle_mute"
+                        class={["insp-pill", @selected.is_muted && "insp-pill--off"]}
+                      >
+                        {if @selected.is_muted, do: "MUTED", else: "ON"}
+                      </button>
+                    </div>
+
+                    <%!-- Non-skill linked asset (e.g. policy/schema): copy-based for now --%>
+                    <%= if linked_asset do %>
+                      <div class="insp-linked">
+                        <span class="insp-linked-badge">{registry_type_label(linked_asset.asset_type)}</span>
+                        <span class="insp-linked-name">{linked_asset.name}</span>
+                        <button type="button" phx-click="detach_node" class="insp-detach-btn">
+                          Detach
+                        </button>
+                      </div>
+                    <% end %>
+                    <%= if @selected.type == :skill && is_nil(@selected.source_asset_id) do %>
+                      <button type="button" phx-click="convert_to_skill" class="insp-convert-btn">
+                        → Save as Skill
+                      </button>
+                    <% end %>
                   <% end %>
                 <% end %>
 
@@ -1507,6 +1856,11 @@ defmodule NsparkWeb.StudioLive do
                     <div :for={v <- @graph_versions} class="version-row">
                       <span class="version-num">v{v.version_number}</span>
                       <span class="version-date">{Calendar.strftime(v.inserted_at, "%b %d")}</span>
+                      <span
+                        :if={v.resolved_skills != []}
+                        class="version-skills"
+                        title={version_skills_title(v.resolved_skills)}
+                      >▦ {length(v.resolved_skills)}</span>
                       <button
                         type="button"
                         phx-click="restore_version"
@@ -1570,6 +1924,15 @@ defmodule NsparkWeb.StudioLive do
                     {if @compiler_view == :rendered, do: "Raw", else: "Preview"}
                   </button>
                   <button
+                    type="button"
+                    phx-click="enter_zen"
+                    phx-value-mode="compiler"
+                    class="compiler-ctrl-btn"
+                    title="Zen view — fullscreen prompt (Esc to exit)"
+                  >
+                    ⛶ Zen
+                  </button>
+                  <button
                     id="copy-compiled"
                     type="button"
                     phx-hook="CopyToClipboard"
@@ -1582,7 +1945,7 @@ defmodule NsparkWeb.StudioLive do
                 </div>
               </div>
               <div class="compiler-stats">
-                ≈ {@compiled.token_estimate} tokens<span :if={@compiled.cost_estimate > 0}> · ~{format_cost(@compiled.cost_estimate)}</span> · {@compiled.included} nodes<span :if={@compiled.excluded > 0}> · {@compiled.excluded} muted</span>
+                ≈ {@compiled.token_estimate} tokens<span :if={@compiled.cost_estimate > 0}> · ~{format_cost(@compiled.cost_estimate)}</span> · {@compiled.included} nodes<span :if={@compiled.excluded > 0}> · {@compiled.excluded} muted</span><span :if={@compiled.resolved_assets != []} title={resolved_assets_title(@compiled.resolved_assets)}> · {length(@compiled.resolved_assets)} linked skill{if length(@compiled.resolved_assets) > 1, do: "s"}</span>
               </div>
               <div class="compiler-body">
                 <%= if @compiled_html == "" do %>
@@ -1639,6 +2002,90 @@ defmodule NsparkWeb.StudioLive do
           </div>
         </div>
       <% end %>
+      <%= if @show_new_skill_modal do %>
+        <div class="dlg-overlay">
+          <div class="dlg-backdrop" phx-click="close_new_skill_modal"></div>
+          <div class="dlg-box dlg-box--wide">
+            <div class="dlg-head">▦ NEW SKILL</div>
+            <div class="dlg-sub">
+              A reusable capability you can link into multiple graphs. Created as a draft.
+            </div>
+            <.form for={%{}} id="new-skill-form" phx-submit="create_skill" phx-change="new_skill_change">
+              <div class="dlg-field-label">NAME</div>
+              <input
+                type="text"
+                name="name"
+                value={@new_skill_name}
+                placeholder="e.g. Citation Enforcement"
+                class="dlg-input"
+                autofocus
+                required
+              />
+              <div class="dlg-field-label">DESCRIPTION <span class="dlg-optional">(optional)</span></div>
+              <input
+                type="text"
+                name="description"
+                value={@new_skill_description}
+                placeholder="What capability does this provide?"
+                class="dlg-input"
+              />
+              <div class="dlg-field-label">CONTENT · MARKDOWN</div>
+              <textarea
+                name="content"
+                rows="6"
+                placeholder="The reusable instruction text. May reference {variables}."
+                class="dlg-input dlg-textarea"
+              >{@new_skill_content}</textarea>
+              <div class="dlg-actions">
+                <button type="button" phx-click="close_new_skill_modal" class="dlg-btn dlg-btn--cancel">
+                  Cancel
+                </button>
+                <button type="submit" class="dlg-btn dlg-btn--create" disabled={String.trim(@new_skill_name) == ""}>
+                  Create Skill
+                </button>
+              </div>
+            </.form>
+          </div>
+        </div>
+      <% end %>
+      <%= if @show_suggestions_modal do %>
+        <div class="dlg-overlay">
+          <div class="dlg-backdrop" phx-click="close_suggestions"></div>
+          <div class="dlg-box dlg-box--wide">
+            <div class="dlg-head">✦ REGISTRY SUGGESTIONS</div>
+            <div class="dlg-sub">
+              The same Skill content is copy-pasted across graphs. Extract each into one
+              shared Skill — every node becomes a linked reference you can update in one place.
+            </div>
+            <div :if={@skill_suggestions == []} class="skill-usage-empty">
+              No duplicated logic found. Nice and DRY.
+            </div>
+            <div class="suggest-list">
+              <div :for={group <- @skill_suggestions} class="suggest-row">
+                <div class="suggest-meta">
+                  <span class="suggest-count">{group.count}×</span>
+                  <span class="suggest-graphs">{Enum.map_join(group.graphs, ", ", & &1.name)}</span>
+                </div>
+                <div class="suggest-content">{String.slice(group.content, 0, 180)}</div>
+                <button
+                  type="button"
+                  phx-click="extract_shared_skill"
+                  phx-value-signature={group.signature}
+                  data-confirm={"Extract \"#{group.label}\" as a shared Skill and link #{group.count} nodes across #{length(group.graphs)} graph(s)?"}
+                  class="dlg-btn dlg-btn--create suggest-extract"
+                >
+                  Extract as shared Skill
+                </button>
+              </div>
+            </div>
+            <div class="dlg-actions">
+              <button type="button" phx-click="close_suggestions" class="dlg-btn dlg-btn--cancel">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      <% end %>
       <%= if @show_deploy_modal do %>
         <div class="dlg-overlay">
           <div class="dlg-backdrop" phx-click="close_deploy_modal"></div>
@@ -1663,6 +2110,67 @@ defmodule NsparkWeb.StudioLive do
                 </button>
               </div>
             </.form>
+          </div>
+        </div>
+      <% end %>
+      <%= if @show_skill_modal && @skill_detail do %>
+        <div class="dlg-overlay">
+          <div class="dlg-backdrop" phx-click="close_skill_modal"></div>
+          <div class="dlg-box dlg-box--wide">
+            <div class="dlg-head">▦ {@skill_detail.skill.name}</div>
+            <div class="dlg-sub">
+              <span class="skill-meta-badge">{@skill_detail.skill.status} · v{@skill_detail.skill.version}</span>
+              Impact analysis — review the blast radius before editing this shared Skill.
+            </div>
+            <div class="skill-impact">
+              <span class="skill-impact-stat">
+                Affected Graphs <strong>{length(@skill_detail.usage.graphs)}</strong>
+              </span>
+              <span class="skill-impact-stat">
+                Affected Deployments <strong>{length(@skill_detail.usage.deployments)}</strong>
+              </span>
+              <span class="skill-impact-stat">
+                Linked Nodes <strong>{@skill_detail.usage.nodes}</strong>
+              </span>
+            </div>
+            <div class="dlg-field-label">USED BY</div>
+            <div :if={@skill_detail.usage.graphs == []} class="skill-usage-empty">
+              Not referenced by any graph yet.
+            </div>
+            <ul :if={@skill_detail.usage.graphs != []} class="skill-usage-list">
+              <li :for={g <- @skill_detail.usage.graphs}>{g.name}</li>
+            </ul>
+            <%= if @skill_detail.usage.deployments != [] do %>
+              <div class="dlg-field-label">LIVE DEPLOYMENTS</div>
+              <ul class="skill-usage-list">
+                <li :for={d <- @skill_detail.usage.deployments}>{d.environment}</li>
+              </ul>
+            <% end %>
+            <div class="dlg-actions">
+              <button type="button" phx-click="close_skill_modal" class="dlg-btn dlg-btn--cancel">
+                Close
+              </button>
+              <button
+                :if={admin_role?(@current_role) && @skill_detail.skill.status != :deprecated}
+                type="button"
+                phx-click="archive_skill"
+                phx-value-skill_id={@skill_detail.skill.id}
+                data-confirm="Deprecate this Skill? Graphs that link it will fail to compile until they are relinked."
+                class="dlg-btn dlg-btn--cancel"
+              >
+                Archive
+              </button>
+              <button
+                :if={admin_role?(@current_role)}
+                type="button"
+                phx-click="publish_skill"
+                phx-value-skill_id={@skill_detail.skill.id}
+                data-confirm={skill_publish_confirm(@skill_detail)}
+                class="dlg-btn dlg-btn--create"
+              >
+                Publish v{@skill_detail.skill.version + 1}
+              </button>
+            </div>
           </div>
         </div>
       <% end %>
