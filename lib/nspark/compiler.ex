@@ -83,6 +83,20 @@ defmodule Nspark.Compiler do
   @doc "Returns `[{atom, display_name}]` for all supported providers."
   def providers, do: Enum.map(@providers, fn {k, v} -> {k, v.name} end)
 
+  @doc "Returns `%{node_id => compile_position}` (1-based) for active (non-muted) nodes."
+  @spec node_order([map()], [map()]) :: %{String.t() => pos_integer()}
+  def node_order(nodes, edges \\ []) do
+    active = Enum.reject(nodes, & &1.is_muted)
+
+    @order
+    |> Enum.flat_map(fn {type, _heading} ->
+      group = Enum.filter(active, &(node_type(&1) == type))
+      if group == [], do: [], else: topo_sort_group(group, edges)
+    end)
+    |> Enum.with_index(1)
+    |> Map.new(fn {n, i} -> {node_id(n), i} end)
+  end
+
   # ── topological sort within a node-type section ────────────────────────────
 
   # Fast path: no edges means nothing to sort.

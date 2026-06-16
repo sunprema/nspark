@@ -7,10 +7,14 @@ defmodule Nspark.Registry do
   tracks the asset (updates propagate); a "cloned" node copies content and
   detaches. That distinction lives on the Node, not here.
   """
-  use Ash.Domain, otp_app: :nspark, extensions: [AshAdmin.Domain]
+  use Ash.Domain, otp_app: :nspark, extensions: [AshAdmin.Domain, AshPaperTrail.Domain]
 
   admin do
     show? true
+  end
+
+  paper_trail do
+    include_versions? true
   end
 
   resources do

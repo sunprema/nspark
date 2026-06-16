@@ -177,6 +177,9 @@
   margin-top: 18px;
 }
 .rail-var {
+  display: block;
+  width: 100%;
+  text-align: left;
   font: 500 10.5px/1 "IBM Plex Mono", monospace;
   color: oklch(0.45 0.1 255);
   border: 1px solid oklch(0.78 0.06 255);
@@ -184,6 +187,71 @@
   padding: 5px 7px;
   margin-bottom: 5px;
   word-break: break-all;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+.rail-var:hover {
+  background: oklch(0.94 0.03 255);
+  border-color: oklch(0.68 0.1 255);
+}
+.rail-var--selected {
+  background: oklch(0.91 0.04 255);
+  color: oklch(0.38 0.14 255);
+  border-color: oklch(0.6 0.14 255);
+}
+
+/* ── Variable detail panel ─────────────────────────────────────────────────── */
+.var-detail {
+  margin: 4px 0 10px;
+  padding: 10px;
+  background: oklch(0.975 0.006 245);
+  border: 1px solid oklch(0.88 0.015 250);
+}
+.var-detail-row {
+  margin-bottom: 10px;
+}
+.var-detail-row:last-child {
+  margin-bottom: 0;
+}
+.var-detail-label {
+  font: 600 8.5px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.12em;
+  color: oklch(0.55 0.02 255);
+  margin-bottom: 5px;
+}
+.var-detail-empty {
+  font: 400 10.5px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.72 0.02 255);
+}
+.var-detail-node {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 7px;
+  margin-bottom: 3px;
+  font: 400 10.5px/1 "IBM Plex Mono", monospace;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.var-detail-node:last-child {
+  margin-bottom: 0;
+}
+.var-detail-node--producer {
+  color: oklch(0.36 0.11 155);
+  background: oklch(0.95 0.022 155);
+  border-color: oklch(0.82 0.07 155);
+}
+.var-detail-node--producer:hover {
+  background: oklch(0.9 0.042 155);
+}
+.var-detail-node--consumer {
+  color: oklch(0.4 0.1 78);
+  background: oklch(0.96 0.018 78);
+  border-color: oklch(0.84 0.06 78);
+}
+.var-detail-node--consumer:hover {
+  background: oklch(0.92 0.035 78);
 }
 .insp-delete {
   margin-top: 14px;
@@ -198,6 +266,143 @@
 }
 .insp-delete:hover {
   background: oklch(0.95 0.03 28);
+}
+
+/* ── Rail registry search + items ────────────────────────────────────────────── */
+.rail-search {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  font: 400 10.5px/1 "IBM Plex Mono", monospace;
+  border: 1px solid oklch(0.86 0.02 250);
+  background: oklch(0.99 0.003 245);
+  color: oklch(0.32 0.02 255);
+  margin-bottom: 8px;
+  outline: none;
+  box-sizing: border-box;
+}
+.rail-search:focus {
+  border-color: oklch(0.68 0.06 255);
+}
+.reg-group-label {
+  font: 600 8px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.12em;
+  color: oklch(0.55 0.02 250);
+  margin: 10px 0 5px;
+}
+.reg-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 1px solid oklch(0.86 0.02 250);
+  background: oklch(0.99 0.003 245);
+  margin-bottom: 4px;
+  cursor: grab;
+  width: 100%;
+  text-align: left;
+  transition: border-color 0.1s ease;
+}
+.reg-item:hover {
+  border-color: oklch(0.7 0.04 255);
+}
+.reg-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.reg-item--deprecated {
+  opacity: 0.4;
+}
+.reg-item--package {
+  cursor: pointer;
+  border-style: dashed;
+  border-color: oklch(0.8 0.03 200);
+  background: oklch(0.992 0.005 200);
+}
+.reg-item--package:hover {
+  border-color: oklch(0.6 0.08 200);
+  background: oklch(0.985 0.01 200);
+}
+.reg-swatch--pkg {
+  border-radius: 50%;
+}
+.reg-swatch {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 2px;
+}
+.reg-name {
+  flex: 1;
+  font: 500 10.5px/1 "IBM Plex Sans", sans-serif;
+  color: oklch(0.36 0.02 255);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reg-badge {
+  font: 500 8px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.06em;
+  color: oklch(0.6 0.02 255);
+  background: oklch(0.94 0.006 250);
+  padding: 2px 5px;
+  flex-shrink: 0;
+}
+
+/* ── Inspector: linked / convert ─────────────────────────────────────────────── */
+.insp-linked {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  margin: 10px 0 0;
+  background: oklch(0.96 0.018 255);
+  border: 1px solid oklch(0.82 0.07 255);
+}
+.insp-linked-badge {
+  font: 600 8px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.1em;
+  color: oklch(0.42 0.13 255);
+  flex-shrink: 0;
+}
+.insp-linked-name {
+  flex: 1;
+  font: 500 10.5px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.36 0.1 255);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.insp-detach-btn {
+  font: 500 9.5px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.5 0.05 255);
+  background: transparent;
+  border: 1px solid oklch(0.78 0.05 255);
+  padding: 3px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.1s ease;
+}
+.insp-detach-btn:hover {
+  border-color: oklch(0.6 0.09 255);
+  color: oklch(0.38 0.1 255);
+}
+.insp-convert-btn {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 7px 10px;
+  font: 500 10.5px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.4 0.13 220);
+  background: oklch(0.97 0.016 220);
+  border: 1px solid oklch(0.8 0.08 220);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.1s ease;
+}
+.insp-convert-btn:hover {
+  background: oklch(0.93 0.027 220);
+  border-color: oklch(0.68 0.12 220);
 }
 
 /* center canvas — the LiveSvelte hook div must fill the column */
@@ -579,6 +784,29 @@
   cursor: default;
 }
 
+/* dlg-box wide variant (architect modal) */
+.dlg-box--wide {
+  width: 580px;
+  max-width: 92vw;
+}
+
+/* Tall textarea for architect prompt */
+.dlg-textarea--tall {
+  min-height: 200px;
+  font: 400 12px/1.6 "IBM Plex Mono", monospace;
+  color: oklch(0.35 0.02 255);
+}
+
+/* Architect error banner */
+.arch-error {
+  font: 500 12px/1.45 "IBM Plex Sans", sans-serif;
+  color: oklch(0.38 0.13 28);
+  background: oklch(0.97 0.012 28);
+  border: 1px solid oklch(0.8 0.06 28);
+  padding: 8px 12px;
+  margin-top: 4px;
+}
+
 /* ───────────────────────── Agent Picker ──────────────────────────────────── */
 .studio-graph-wrap {
   position: relative;
@@ -868,6 +1096,18 @@
 }
 .diag-item--error {
   color: oklch(0.42 0.14 28);
+}
+.diag-item--clickable {
+  cursor: pointer;
+}
+.diag-item--clickable:hover {
+  background: oklch(0.96 0.008 250);
+}
+.diag-item--warn.diag-item--clickable:hover {
+  background: oklch(0.96 0.012 78);
+}
+.diag-item--error.diag-item--clickable:hover {
+  background: oklch(0.96 0.012 28);
 }
 .diag-icon {
   flex-shrink: 0;

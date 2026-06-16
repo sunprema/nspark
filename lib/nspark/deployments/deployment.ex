@@ -8,11 +8,21 @@ defmodule Nspark.Deployments.Deployment do
     otp_app: :nspark,
     domain: Nspark.Deployments,
     data_layer: AshPostgres.DataLayer,
-    authorizers: [Ash.Policy.Authorizer]
+    authorizers: [Ash.Policy.Authorizer],
+    extensions: [AshPaperTrail.Resource]
 
   postgres do
     table "deployments"
     repo Nspark.Repo
+  end
+
+  paper_trail do
+    change_tracking_mode :changes_only
+    store_action_name? true
+    reference_source? false
+    attributes_as_attributes [:organization_id, :project_id]
+
+    belongs_to_actor :user, Nspark.Accounts.User, domain: Nspark.Accounts
   end
 
   multitenancy do

@@ -7,11 +7,21 @@ defmodule Nspark.Registry.Policy do
     otp_app: :nspark,
     domain: Nspark.Registry,
     data_layer: AshPostgres.DataLayer,
-    authorizers: [Ash.Policy.Authorizer]
+    authorizers: [Ash.Policy.Authorizer],
+    extensions: [AshPaperTrail.Resource]
 
   postgres do
     table "policies"
     repo Nspark.Repo
+  end
+
+  paper_trail do
+    change_tracking_mode :changes_only
+    store_action_name? true
+    reference_source? false
+    attributes_as_attributes [:organization_id]
+
+    belongs_to_actor :user, Nspark.Accounts.User, domain: Nspark.Accounts
   end
 
   multitenancy do

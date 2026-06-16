@@ -52,6 +52,33 @@ const DragRailNode = {
   },
 };
 
+// Enables drag-from-registry-browser to canvas for linked-node creation.
+const DragRegistryAsset = {
+  mounted() {
+    let dragged = false;
+
+    this.el.addEventListener("dragstart", (e) => {
+      dragged = true;
+      e.dataTransfer.setData(
+        "application/nspark-registry-asset",
+        JSON.stringify({
+          asset_id: this.el.dataset.assetId,
+          asset_type: this.el.dataset.assetType,
+        })
+      );
+      e.dataTransfer.effectAllowed = "copy";
+    });
+
+    this.el.addEventListener("dragend", () => {
+      setTimeout(() => { dragged = false; }, 50);
+    });
+
+    this.el.addEventListener("click", (e) => {
+      if (dragged) e.stopImmediatePropagation();
+    }, true);
+  },
+};
+
 const CopyToClipboard = {
   mounted() {
     this.el.addEventListener("click", () => {
@@ -69,7 +96,7 @@ const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, ...getHooks(Components), DragRailNode, CopyToClipboard},
+  hooks: {...colocatedHooks, ...getHooks(Components), DragRailNode, DragRegistryAsset, CopyToClipboard},
 })
 
 // Show progress bar on live navigation and form submits

@@ -4,7 +4,7 @@
 
   let { onReady } = $props();
   const { screenToFlowPosition, fitView } = useSvelteFlow();
-  onReady(screenToFlowPosition);
+  onReady({ screenToFlowPosition, fitView });
 
-  onMount(() => fitView());
+  onMount(() => fitView({ padding: 0.15 }));
 </script>

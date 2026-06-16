@@ -79,32 +79,32 @@ Implement the three-tier model end to end (HLD §4).
 - [x] Model-specific transforms (OpenAI / Anthropic / Gemini) behind a provider abstraction.
 
 ### 3.2 Diagnostics panel (UX §9)
-- [ ] DAG validation: cycle detection, floating nodes, missing connections.
-- [ ] Variable diagnostics: undefined vs unused variables.
-- [ ] Output diagnostics: missing/invalid schema; conflicting/duplicate instructions.
-- [ ] Surface as a persistent panel with ✓ / ⚠ / ✕ states; mark node states on the canvas.
+- [x] DAG validation: cycle detection, floating nodes, missing connections.
+- [x] Variable diagnostics: undefined vs unused variables.
+- [x] Output diagnostics: missing/invalid schema; conflicting/duplicate instructions.
+- [x] Surface as a persistent panel with ✓ / ⚠ / ✕ states; mark node states on the canvas.
 
 ### 3.3 Variable explorer interactions (UX §4.2)
-- [ ] Click a variable → highlight consuming + producing nodes, show dependency path.
+- [x] Click a variable → highlight consuming + producing nodes, show dependency path.
 
 ### 3.4 Registry in the studio
-- [ ] Drag a registry `Skill`/`Policy`/etc. onto the canvas → create a **linked** node (`Node.source_asset_id` set).
-- [ ] "Convert to Skill" / clone (detach) actions from the inspector.
-- [ ] Knowledge Registry browser in the rail (skills/policies/schemas/memory templates), search.
+- [x] Drag a registry `Skill`/`Policy`/etc. onto the canvas → create a **linked** node (`Node.source_asset_id` set).
+- [x] "Convert to Skill" / clone (detach) actions from the inspector.
+- [x] Knowledge Registry browser in the rail (skills/policies/schemas/memory templates), search.
 
 ### 3.5 Canvas polish
-- [ ] Conditional-group wrapper rendering (the dashed `IF {mode} == …` frame from the reference).
-- [ ] Node type → richer card treatments; muted styling parity with the reference.
-- [ ] Minimap/controls theming; fit-to-selection; keyboard shortcuts.
+- [x] Conditional-group wrapper rendering (the dashed `IF {mode} == …` frame from the reference).
+- [x] Node type → richer card treatments; muted styling parity with the reference.
+- [x] Minimap/controls theming; fit-to-selection; keyboard shortcuts.
 
 ---
 
 ## Priority 4 — platform / AI
 
-- [ ] **AI Architect** (HLD §7): NL copilot that edits graph structure; Prompt-to-Graph import (Instructor + provider abstraction; `ash_ai` is a dep).
-- [ ] **Oban jobs** for compilation, deployment pipelines, version snapshots, AI jobs (`ash_oban` available).
-- [ ] **Packages** UX: bundle/install reusable architecture bundles across projects.
-- [ ] Audit trail (`ash_paper_trail`) across graph/skill/deployment changes.
+- [x] **AI Architect** (HLD §7): NL copilot that edits graph structure; Prompt-to-Graph import (`Nspark.Architect` via `req` + `claude-opus-4-8` tool-use).
+- [x] **Oban jobs** for compilation, deployment pipelines, version snapshots, AI jobs — `Nspark.Workers.ArchitectWorker` on `ai` queue; PubSub result delivery to LiveView.
+- [x] **Packages** UX: bundle/install reusable architecture bundles across projects — packages browser in rail, click-to-install creates linked nodes.
+- [x] Audit trail (`ash_paper_trail`) across graph/skill/deployment changes.
 
 ---
 

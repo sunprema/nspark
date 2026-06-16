@@ -3,10 +3,14 @@ defmodule Nspark.Deployments do
   The deployments domain: pinned GraphVersion endpoints per environment.
   See docs/HLD.md §8 "Deployment Architecture".
   """
-  use Ash.Domain, otp_app: :nspark, extensions: [AshAdmin.Domain]
+  use Ash.Domain, otp_app: :nspark, extensions: [AshAdmin.Domain, AshPaperTrail.Domain]
 
   admin do
     show? true
+  end
+
+  paper_trail do
+    include_versions? true
   end
 
   resources do

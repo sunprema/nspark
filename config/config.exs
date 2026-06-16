@@ -22,7 +22,7 @@ config :ash_oban, pro?: false
 config :nspark, Oban,
   engine: Oban.Engines.Basic,
   notifier: Oban.Notifiers.Postgres,
-  queues: [default: 10],
+  queues: [default: 10, ai: 5],
   repo: Nspark.Repo,
   plugins: [{Oban.Plugins.Cron, []}]
 

@@ -50,6 +50,12 @@ defmodule Nspark.Architecture.Edge do
       public? true
     end
 
+    attribute :metadata, :map do
+      default %{}
+      allow_nil? false
+      public? true
+    end
+
     timestamps()
   end
 

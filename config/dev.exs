@@ -71,6 +71,8 @@ config :nspark, NsparkWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :nspark, dev_routes: true, token_signing_secret: "+8HxCk8GJHHTgLV3zwVJexNIhsDBrk0B"
 
+config :nspark, :anthropic_api_key, System.get_env("ANTHROPIC_API_KEY", "")
+
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 

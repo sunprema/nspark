@@ -31,6 +31,10 @@ defmodule Nspark.Diagnostics do
     |> check_no_persona(active)
     |> check_multiple_personas(active)
     |> check_no_output(active)
+    |> check_empty_output(active)
+    |> check_multiple_outputs(active)
+    |> check_undefined_variables(active)
+    |> check_unused_variables(active)
     |> Enum.reverse()
   end
 
@@ -131,6 +135,125 @@ defmodule Nspark.Diagnostics do
         | diags
       ]
   end
+
+  @provider_types [:context, :memory]
+  @consumer_types [:persona, :constraint, :skill, :tool, :evaluation, :conditional, :output]
+
+  defp check_empty_output(diags, nodes) do
+    empty =
+      nodes
+      |> Enum.filter(&(node_type(&1) == :output))
+      |> Enum.filter(fn n ->
+        c = node_content(n)
+        is_nil(c) or String.trim(c) == ""
+      end)
+
+    case empty do
+      [] ->
+        diags
+
+      ns ->
+        [
+          %{
+            level: :warning,
+            code: :empty_output,
+            message: "Output node has no schema defined.",
+            node_ids: Enum.map(ns, &node_id/1)
+          }
+          | diags
+        ]
+    end
+  end
+
+  defp check_multiple_outputs(diags, nodes) do
+    outputs = Enum.filter(nodes, &(node_type(&1) == :output))
+
+    case outputs do
+      [_] ->
+        diags
+
+      [] ->
+        diags
+
+      ns ->
+        [
+          %{
+            level: :warning,
+            code: :multiple_outputs,
+            message:
+              "#{length(ns)} Output nodes — response format may be ambiguous.",
+            node_ids: Enum.map(ns, &node_id/1)
+          }
+          | diags
+        ]
+    end
+  end
+
+  defp check_undefined_variables(diags, nodes) do
+    providers = Enum.filter(nodes, &(node_type(&1) in @provider_types))
+    consumers = Enum.filter(nodes, &(node_type(&1) in @consumer_types))
+
+    provided = MapSet.new(vars_in(providers))
+
+    undefined =
+      consumers
+      |> Enum.flat_map(fn n -> Enum.map(vars_in_node(n), &{&1, node_id(n)}) end)
+      |> Enum.group_by(fn {var, _} -> var end, fn {_, id} -> id end)
+      |> Enum.reject(fn {var, _ids} -> MapSet.member?(provided, var) end)
+      |> Enum.map(fn {var, ids} ->
+        %{
+          level: :warning,
+          code: :undefined_variable,
+          message: "{#{var}} is used but not defined in any Context or Memory node.",
+          node_ids: Enum.uniq(ids)
+        }
+      end)
+
+    undefined ++ diags
+  end
+
+  defp check_unused_variables(diags, nodes) do
+    providers = Enum.filter(nodes, &(node_type(&1) in @provider_types))
+    consumers = Enum.filter(nodes, &(node_type(&1) in @consumer_types))
+
+    used_by_consumers = MapSet.new(vars_in(consumers))
+
+    unused =
+      providers
+      |> Enum.flat_map(fn n ->
+        n
+        |> vars_in_node()
+        |> Enum.reject(&MapSet.member?(used_by_consumers, &1))
+        |> Enum.map(&{&1, node_id(n)})
+      end)
+      |> Enum.group_by(fn {var, _} -> var end, fn {_, id} -> id end)
+      |> Enum.map(fn {var, ids} ->
+        %{
+          level: :warning,
+          code: :unused_variable,
+          message: "{#{var}} is defined but not referenced in any other node.",
+          node_ids: Enum.uniq(ids)
+        }
+      end)
+
+    unused ++ diags
+  end
+
+  # ── variable extraction ───────────────────────────────────────────────────────
+
+  defp vars_in(nodes), do: Enum.flat_map(nodes, &vars_in_node/1)
+
+  defp vars_in_node(%{content: c}) when is_binary(c),
+    do: ~r/\{([a-zA-Z_]\w*)\}/ |> Regex.scan(c) |> Enum.map(fn [_, n] -> n end)
+
+  defp vars_in_node(%{"content" => c}) when is_binary(c),
+    do: ~r/\{([a-zA-Z_]\w*)\}/ |> Regex.scan(c) |> Enum.map(fn [_, n] -> n end)
+
+  defp vars_in_node(_), do: []
+
+  defp node_content(%{content: c}), do: c
+  defp node_content(%{"content" => c}), do: c
+  defp node_content(_), do: nil
 
   # ── cycle detection via Kahn's algorithm ─────────────────────────────────────
   # Nodes absent from the topological sort are in cycles.

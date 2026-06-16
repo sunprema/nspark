@@ -23,6 +23,8 @@ end
 config :nspark, NsparkWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+config :nspark, :anthropic_api_key, System.get_env("ANTHROPIC_API_KEY", "")
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

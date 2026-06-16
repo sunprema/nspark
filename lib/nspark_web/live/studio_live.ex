@@ -46,6 +46,13 @@ defmodule NsparkWeb.StudioLive do
      |> assign(:graph_dirty, false)
      |> assign(:graph_versions, [])
      |> assign(:diagnostics, [])
+     |> assign(:selected_variable, nil)
+     |> assign(:variable_producers, [])
+     |> assign(:variable_consumers, [])
+     # registry
+     |> assign(:registry_items, [])
+     |> assign(:packages, [])
+     |> assign(:registry_search, "")
      # agent picker
      |> assign(:all_graphs, [])
      |> assign(:graph_search, "")
@@ -57,7 +64,11 @@ defmodule NsparkWeb.StudioLive do
      |> assign(:new_graph_description, "")
      |> assign(:show_deploy_modal, false)
      |> assign(:compiler_view, :rendered)
-     |> assign(:selected_provider, :anthropic)}
+     |> assign(:selected_provider, :anthropic)
+     # architect
+     |> assign(:show_architect_modal, false)
+     |> assign(:architect_loading, false)
+     |> assign(:architect_error, nil)}
   end
 
   @impl true
@@ -72,6 +83,7 @@ defmodule NsparkWeb.StudioLive do
       |> assign(:show_agent_picker, false)
       |> assign(:graph_search, "")
       |> load_from_params(params, all_graphs)
+      |> load_registry()
 
     {:noreply, socket}
   end
@@ -103,11 +115,31 @@ defmodule NsparkWeb.StudioLive do
 
   @impl true
   def handle_event("select_node", %{"id" => id}, socket) when is_binary(id) do
-    {:noreply, assign(socket, :selected, find(socket, id))}
+    {:noreply, socket |> assign(:selected, find(socket, id)) |> clear_var_selection()}
   end
 
   def handle_event("select_node", _params, socket) do
-    {:noreply, assign(socket, :selected, nil)}
+    {:noreply, socket |> assign(:selected, nil) |> clear_var_selection()}
+  end
+
+  def handle_event("select_variable", %{"name" => name}, socket) do
+    socket =
+      if socket.assigns.selected_variable == name do
+        socket
+        |> assign(:selected_variable, nil)
+        |> assign(:variable_producers, [])
+        |> assign(:variable_consumers, [])
+      else
+        {producers, consumers} = compute_variable_info(name, socket.assigns.nodes)
+
+        socket
+        |> assign(:selected, nil)
+        |> assign(:selected_variable, name)
+        |> assign(:variable_producers, producers)
+        |> assign(:variable_consumers, consumers)
+      end
+
+    {:noreply, apply_var_highlight(socket)}
   end
 
   # ── drag → persist position (no re-push; client already shows it) ────────────
@@ -224,6 +256,107 @@ defmodule NsparkWeb.StudioLive do
   def handle_event("delete_node", %{"id" => id}, socket) do
     destroy_node(id, socket)
     {:noreply, socket |> assign(:selected, nil) |> refresh() |> mark_dirty()}
+  end
+
+  # ── registry: add linked node ────────────────────────────────────────────────
+
+  def handle_event("add_registry_node_at", %{"asset_id" => id, "asset_type" => type, "x" => x, "y" => y}, socket) do
+    if socket.assigns.graph do
+      create_linked_node(id, type, %{"x" => x, "y" => y}, socket)
+      {:noreply, socket |> refresh() |> mark_dirty()}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("add_registry_node", %{"asset_id" => id, "asset_type" => type}, socket) do
+    if socket.assigns.graph do
+      count = length(socket.assigns.nodes)
+      pos = %{"x" => 440, "y" => 60 + rem(count, 8) * 44}
+      create_linked_node(id, type, pos, socket)
+      {:noreply, socket |> refresh() |> mark_dirty()}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # ── registry: convert / detach ───────────────────────────────────────────────
+
+  def handle_event("convert_to_skill", _params, socket) do
+    case socket.assigns.selected do
+      %{type: :skill, source_asset_id: nil} = node ->
+        opts = ash_opts(socket)
+
+        case Ash.create(
+               Nspark.Registry.Skill,
+               %{name: node.label, content: node.content || ""},
+               opts
+             ) do
+          {:ok, skill} ->
+            _ = Ash.update!(node, %{source_asset_id: skill.id}, opts)
+
+            {:noreply,
+             socket
+             |> load_registry()
+             |> refresh()
+             |> put_flash(:info, "Saved as Skill \"#{skill.name}\"")}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Failed to save skill: #{inspect(reason)}")}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("detach_node", _params, socket) do
+    case socket.assigns.selected do
+      nil ->
+        {:noreply, socket}
+
+      node ->
+        _ = Ash.update!(node, %{source_asset_id: nil}, ash_opts(socket))
+        {:noreply, socket |> refresh() |> put_flash(:info, "Node detached from registry.")}
+    end
+  end
+
+  # ── packages: install ────────────────────────────────────────────────────────
+
+  def handle_event("install_package", %{"package_id" => pkg_id}, socket) do
+    if is_nil(socket.assigns.graph) do
+      {:noreply, put_flash(socket, :error, "Select or create a graph first.")}
+    else
+      opts = ash_opts(socket)
+      alias Nspark.Registry.{Package, PackageItem}
+
+      with {:ok, pkg} <- Ash.get(Package, pkg_id, opts),
+           {:ok, items} <- Ash.read(PackageItem |> Ash.Query.filter(package_id == ^pkg.id), opts) do
+        count = length(socket.assigns.nodes)
+
+        Enum.with_index(items, count)
+        |> Enum.each(fn {item, idx} ->
+          col = rem(idx, 3)
+          row = div(idx, 3)
+          pos = %{"x" => col * 320 + 60, "y" => row * 200 + 60}
+          create_linked_node(to_string(item.asset_id), to_string(item.asset_type), pos, socket)
+        end)
+
+        {:noreply,
+         socket
+         |> refresh()
+         |> mark_dirty()
+         |> put_flash(:info, "Installed package \"#{pkg.name}\" (#{length(items)} nodes).")}
+      else
+        _ -> {:noreply, put_flash(socket, :error, "Failed to load package.")}
+      end
+    end
+  end
+
+  # ── registry: search ─────────────────────────────────────────────────────────
+
+  def handle_event("registry_search_change", %{"value" => q}, socket) do
+    {:noreply, assign(socket, :registry_search, q)}
   end
 
   # ── new graph modal ──────────────────────────────────────────────────────────
@@ -354,6 +487,56 @@ defmodule NsparkWeb.StudioLive do
     {:noreply, assign(socket, :show_deploy_modal, false)}
   end
 
+  # ── AI Architect ─────────────────────────────────────────────────────────────
+
+  def handle_event("open_architect", _params, socket) do
+    {:noreply, assign(socket, show_architect_modal: true, architect_error: nil)}
+  end
+
+  def handle_event("close_architect", _params, socket) do
+    {:noreply, assign(socket, show_architect_modal: false, architect_loading: false, architect_error: nil)}
+  end
+
+  def handle_event("run_architect", %{"prompt" => prompt}, socket) do
+    if is_nil(socket.assigns.graph) do
+      {:noreply, put_flash(socket, :error, "Select or create a graph first.")}
+    else
+      graph = socket.assigns.graph
+
+      # Subscribe so the Oban worker can broadcast back to us.
+      Phoenix.PubSub.subscribe(Nspark.PubSub, "architect:#{graph.id}")
+
+      %{
+        "prompt" => String.trim(prompt),
+        "graph_id" => graph.id,
+        "org_id" => socket.assigns.org_id,
+        "user_id" => socket.assigns.current_user.id
+      }
+      |> Nspark.Workers.ArchitectWorker.new()
+      |> Oban.insert!()
+
+      {:noreply, assign(socket, architect_loading: true, architect_error: nil)}
+    end
+  end
+
+  @impl true
+  def handle_info({:architect_done, :ok, _ids}, socket) do
+    Phoenix.PubSub.unsubscribe(Nspark.PubSub, "architect:#{socket.assigns.graph.id}")
+
+    socket =
+      socket
+      |> assign(show_architect_modal: false, architect_loading: false, architect_error: nil)
+      |> assign(:graph_dirty, true)
+      |> refresh()
+
+    {:noreply, put_flash(socket, :info, "Graph architected — review and publish when ready.")}
+  end
+
+  def handle_info({:architect_done, :error, reason}, socket) do
+    Phoenix.PubSub.unsubscribe(Nspark.PubSub, "architect:#{socket.assigns.graph.id}")
+    {:noreply, assign(socket, architect_loading: false, architect_error: reason)}
+  end
+
   def handle_event("deploy", %{"environment" => env_str}, socket) do
     case socket.assigns.graph_versions do
       [] ->
@@ -474,26 +657,28 @@ defmodule NsparkWeb.StudioLive do
     edges = Edge |> filter(graph_id == ^graph.id) |> Ash.read!(opts)
 
     compiled = Nspark.Compiler.compile(nodes, edges, provider: provider)
+    node_order = Nspark.Compiler.node_order(nodes, edges)
     diagnostics = Nspark.Diagnostics.run(nodes, edges)
+    node_diagnostics = build_node_diagnostics(diagnostics)
+    var_node_ids = var_node_ids_for(socket.assigns[:selected_variable], nodes)
 
-    node_diagnostics =
-      Enum.reduce(diagnostics, %{}, fn diag, acc ->
-        Enum.reduce(diag.node_ids, acc, fn id, acc ->
-          Map.update(acc, id, diag.level, fn existing ->
-            if diag.level == :error, do: :error, else: existing
-          end)
-        end)
-      end)
+    {var_producers, var_consumers} =
+      case socket.assigns[:selected_variable] do
+        nil -> {[], []}
+        name -> compute_variable_info(name, nodes)
+      end
 
     socket
     |> assign(:nodes, nodes)
-    |> assign(:flow_nodes, to_flow_nodes(nodes, node_diagnostics))
+    |> assign(:flow_nodes, to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order))
     |> assign(:flow_edges, to_flow_edges(edges))
     |> assign(:edge_count, length(edges))
     |> assign(:variables, variables_in(nodes))
     |> assign(:compiled, compiled)
     |> assign(:compiled_html, render_compiled(compiled.markdown))
     |> assign(:diagnostics, diagnostics)
+    |> assign(:variable_producers, var_producers)
+    |> assign(:variable_consumers, var_consumers)
     |> assign(:selected, selected_id && Enum.find(nodes, &(&1.id == selected_id)))
   end
 
@@ -576,9 +761,161 @@ defmodule NsparkWeb.StudioLive do
     end
   end
 
+  defp load_registry(socket) do
+    opts = ash_opts(socket)
+
+    alias Nspark.Registry.{Skill, Policy, Schema, MemoryTemplate, Package}
+
+    items =
+      Enum.map(Ash.read!(Skill, opts), &to_registry_item(&1, :skill)) ++
+      Enum.map(Ash.read!(Policy, opts), &to_registry_item(&1, :policy)) ++
+      Enum.map(Ash.read!(Schema, opts), &to_registry_item(&1, :schema)) ++
+      Enum.map(Ash.read!(MemoryTemplate, opts), &to_registry_item(&1, :memory_template))
+
+    packages = Ash.read!(Package, opts) |> Enum.map(&to_package_item/1)
+
+    socket
+    |> assign(:registry_items, items)
+    |> assign(:packages, packages)
+  end
+
+  defp to_registry_item(resource, asset_type) do
+    %{
+      id: resource.id,
+      name: resource.name,
+      description: resource.description,
+      content: resource.content,
+      status: resource.status,
+      asset_type: asset_type
+    }
+  end
+
+  defp to_package_item(pkg) do
+    %{
+      id: pkg.id,
+      name: pkg.name,
+      description: pkg.description,
+      version: pkg.version,
+      status: pkg.status
+    }
+  end
+
+  defp create_linked_node(asset_id, asset_type, pos, socket) do
+    item = Enum.find(socket.assigns.registry_items, &(&1.id == asset_id))
+
+    if item do
+      Ash.create!(
+        Node,
+        %{
+          type: registry_node_type(asset_type),
+          label: item.name,
+          content: item.content,
+          source_asset_id: asset_id,
+          graph_id: socket.assigns.graph.id,
+          metadata: %{"position" => pos}
+        },
+        ash_opts(socket)
+      )
+    end
+  end
+
+  defp registry_node_type("skill"), do: :skill
+  defp registry_node_type("policy"), do: :constraint
+  defp registry_node_type("schema"), do: :output
+  defp registry_node_type("memory_template"), do: :memory
+  defp registry_node_type(_), do: :skill
+
+  defp filter_registry(items, ""), do: items
+
+  defp filter_registry(items, q) do
+    q = String.downcase(q)
+
+    Enum.filter(items, fn item ->
+      String.contains?(String.downcase(item.name), q) or
+        (is_binary(item.description) and String.contains?(String.downcase(item.description), q))
+    end)
+  end
+
+  defp registry_group_label(:skill), do: "SKILLS"
+  defp registry_group_label(:policy), do: "POLICIES"
+  defp registry_group_label(:schema), do: "SCHEMAS"
+  defp registry_group_label(:memory_template), do: "MEMORY"
+
+  defp registry_hue(:skill), do: 220
+  defp registry_hue(:policy), do: 28
+  defp registry_hue(:schema), do: 300
+  defp registry_hue(:memory_template), do: 330
+
+  defp registry_type_label(:skill), do: "SKILL"
+  defp registry_type_label(:policy), do: "POLICY"
+  defp registry_type_label(:schema), do: "SCHEMA"
+  defp registry_type_label(:memory_template), do: "MEMORY"
+  defp registry_type_label(_), do: "ASSET"
+
+  defp build_node_diagnostics(diagnostics) do
+    Enum.reduce(diagnostics, %{}, fn diag, acc ->
+      Enum.reduce(diag.node_ids, acc, fn id, acc ->
+        Map.update(acc, id, diag.level, fn existing ->
+          if diag.level == :error, do: :error, else: existing
+        end)
+      end)
+    end)
+  end
+
+  defp var_node_ids_for(nil, _nodes), do: %{}
+
+  defp var_node_ids_for(name, nodes) do
+    {producers, consumers} = compute_variable_info(name, nodes)
+    Map.merge(
+      Map.new(producers, &{&1.id, "producer"}),
+      Map.new(consumers, &{&1.id, "consumer"})
+    )
+  end
+
+  defp compute_variable_info(var_name, nodes) do
+    pattern = "{#{var_name}}"
+    provider_types = [:context, :memory]
+
+    producers =
+      Enum.filter(nodes, fn n ->
+        n.type in provider_types and
+          is_binary(n.content) and
+          String.contains?(n.content, pattern)
+      end)
+
+    consumers =
+      Enum.filter(nodes, fn n ->
+        n.type not in provider_types and
+          is_binary(n.content) and
+          String.contains?(n.content, pattern)
+      end)
+
+    {producers, consumers}
+  end
+
+  defp apply_var_highlight(socket) do
+    nodes = socket.assigns.nodes
+    node_diag = build_node_diagnostics(socket.assigns.diagnostics)
+    var_node_ids = var_node_ids_for(socket.assigns.selected_variable, nodes)
+    node_order = Nspark.Compiler.node_order(nodes)
+    assign(socket, :flow_nodes, to_flow_nodes(nodes, node_diag, var_node_ids, node_order))
+  end
+
+  defp clear_var_selection(socket) do
+    if socket.assigns.selected_variable do
+      socket
+      |> assign(:selected_variable, nil)
+      |> assign(:variable_producers, [])
+      |> assign(:variable_consumers, [])
+      |> apply_var_highlight()
+    else
+      socket
+    end
+  end
+
   # ── flow serialization ──────────────────────────────────────────────────────
 
-  defp to_flow_nodes(nodes, node_diagnostics) do
+  defp to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order) do
     nodes
     |> Enum.with_index()
     |> Enum.map(fn {n, i} ->
@@ -598,7 +935,10 @@ defmodule NsparkWeb.StudioLive do
           node_type: to_string(n.type),
           content: n.content,
           muted: n.is_muted,
-          diagnostic: diag
+          diagnostic: diag,
+          var_role: Map.get(var_node_ids, n.id),
+          compile_order: Map.get(node_order, n.id),
+          linked: not is_nil(n.source_asset_id)
         }
       }
     end)
@@ -679,8 +1019,14 @@ defmodule NsparkWeb.StudioLive do
           <button type="button" phx-click="open_new_graph_modal" class="studio-btn studio-btn--new">
             + New Agent
           </button>
-          <div class="studio-btn">Import Prompt</div>
-          <div class="studio-btn studio-btn--accent">✦ Import &amp; Architect</div>
+          <button
+            :if={@graph}
+            type="button"
+            phx-click="open_architect"
+            class="studio-btn studio-btn--accent"
+          >
+            ✦ Architect
+          </button>
           <button
             :if={@graph}
             type="button"
@@ -722,7 +1068,96 @@ defmodule NsparkWeb.StudioLive do
 
             <div class="rail-head rail-head--mt">VARIABLES</div>
             <div :if={@variables == []} class="rail-hint">none discovered</div>
-            <div :for={v <- @variables} class="rail-var">{"{" <> v <> "}"}</div>
+            <button
+              :for={v <- @variables}
+              type="button"
+              class={["rail-var", @selected_variable == v && "rail-var--selected"]}
+              phx-click="select_variable"
+              phx-value-name={v}
+            >
+              {"{" <> v <> "}"}
+            </button>
+            <%= if @selected_variable do %>
+              <div class="var-detail">
+                <div class="var-detail-row">
+                  <div class="var-detail-label">DEFINES</div>
+                  <div :if={@variable_producers == []} class="var-detail-empty">—</div>
+                  <button
+                    :for={n <- @variable_producers}
+                    type="button"
+                    class="var-detail-node var-detail-node--producer"
+                    phx-click="select_node"
+                    phx-value-id={n.id}
+                  >{n.label}</button>
+                </div>
+                <div class="var-detail-row">
+                  <div class="var-detail-label">USED BY</div>
+                  <div :if={@variable_consumers == []} class="var-detail-empty">—</div>
+                  <button
+                    :for={n <- @variable_consumers}
+                    type="button"
+                    class="var-detail-node var-detail-node--consumer"
+                    phx-click="select_node"
+                    phx-value-id={n.id}
+                  >{n.label}</button>
+                </div>
+              </div>
+            <% end %>
+
+            <div class="rail-head rail-head--mt">REGISTRY</div>
+            <input
+              type="text"
+              value={@registry_search}
+              phx-keyup="registry_search_change"
+              phx-debounce="200"
+              placeholder="Search…"
+              class="rail-search"
+            />
+            <% reg_filtered = filter_registry(@registry_items, @registry_search) %>
+            <div :if={@registry_items == [] && @packages == []} class="rail-hint">No registry assets yet</div>
+            <div :if={@registry_items != [] && reg_filtered == [] && @packages == []} class="rail-hint">No matches</div>
+            <%= for group_type <- [:skill, :policy, :schema, :memory_template] do %>
+              <% group = Enum.filter(reg_filtered, &(&1.asset_type == group_type)) %>
+              <%= if group != [] do %>
+                <div class="reg-group-label">{registry_group_label(group_type)}</div>
+                <button
+                  :for={item <- group}
+                  id={"reg-#{item.id}"}
+                  type="button"
+                  class={["reg-item", item.status == :deprecated && "reg-item--deprecated"]}
+                  draggable="true"
+                  phx-hook="DragRegistryAsset"
+                  data-asset-id={item.id}
+                  data-asset-type={Atom.to_string(item.asset_type)}
+                  phx-click="add_registry_node"
+                  phx-value-asset_id={item.id}
+                  phx-value-asset_type={Atom.to_string(item.asset_type)}
+                  title={"#{item.name}#{if item.description, do: " — #{item.description}", else: ""}"}
+                  disabled={is_nil(@graph)}
+                >
+                  <span class="reg-swatch" style={"background: oklch(0.55 0.13 #{registry_hue(group_type)});"}></span>
+                  <span class="reg-name">{item.name}</span>
+                  <span class="reg-badge">{item.status}</span>
+                </button>
+              <% end %>
+            <% end %>
+            <%= if @packages != [] do %>
+              <div class="reg-group-label">PACKAGES</div>
+              <button
+                :for={pkg <- @packages}
+                id={"pkg-#{pkg.id}"}
+                type="button"
+                class={["reg-item reg-item--package", pkg.status == :deprecated && "reg-item--deprecated"]}
+                phx-click="install_package"
+                phx-value-package_id={pkg.id}
+                title={"#{pkg.name}#{if pkg.description, do: " — #{pkg.description}", else: ""} (click to install)"}
+                disabled={is_nil(@graph)}
+              >
+                <span class="reg-swatch reg-swatch--pkg" style="background: oklch(0.55 0.13 200);"></span>
+                <span class="reg-name">{pkg.name}</span>
+                <span class="reg-badge">v{pkg.version}</span>
+              </button>
+            <% end %>
           </aside>
 
           <main class="studio-canvas">
@@ -789,6 +1224,23 @@ defmodule NsparkWeb.StudioLive do
                   </button>
                 </div>
 
+                <%!-- Registry link info + actions --%>
+                <% linked_asset = @selected.source_asset_id && Enum.find(@registry_items, &(&1.id == @selected.source_asset_id)) %>
+                <%= if linked_asset do %>
+                  <div class="insp-linked">
+                    <span class="insp-linked-badge">{registry_type_label(linked_asset.asset_type)}</span>
+                    <span class="insp-linked-name">{linked_asset.name}</span>
+                    <button type="button" phx-click="detach_node" class="insp-detach-btn">
+                      Detach
+                    </button>
+                  </div>
+                <% end %>
+                <%= if @selected.type == :skill && is_nil(@selected.source_asset_id) do %>
+                  <button type="button" phx-click="convert_to_skill" class="insp-convert-btn">
+                    → Save as Skill
+                  </button>
+                <% end %>
+
                 <button
                   type="button"
                   phx-click="delete_node"
@@ -840,7 +1292,13 @@ defmodule NsparkWeb.StudioLive do
               <div :if={@diagnostics != []} class="diag-list">
                 <div
                   :for={d <- @diagnostics}
-                  class={["diag-item", d.level == :error && "diag-item--error", d.level == :warning && "diag-item--warn"]}
+                  class={["diag-item",
+                    d.level == :error && "diag-item--error",
+                    d.level == :warning && "diag-item--warn",
+                    d.node_ids != [] && "diag-item--clickable"
+                  ]}
+                  phx-click={d.node_ids != [] && "select_node"}
+                  phx-value-id={List.first(d.node_ids)}
                 >
                   <span class="diag-icon">{if d.level == :error, do: "✕", else: "⚠"}</span>
                   <span class="diag-msg">{d.message}</span>
@@ -956,6 +1414,43 @@ defmodule NsparkWeb.StudioLive do
                 </button>
                 <button type="submit" class="dlg-btn dlg-btn--create">
                   Deploy
+                </button>
+              </div>
+            </.form>
+          </div>
+        </div>
+      <% end %>
+      <%= if @show_architect_modal do %>
+        <div class="dlg-overlay">
+          <div class="dlg-backdrop" phx-click="close_architect"></div>
+          <div class="dlg-box dlg-box--wide">
+            <div class="dlg-head">✦ AI ARCHITECT</div>
+            <div class="dlg-sub">
+              Paste a raw prompt or agent description. Claude will decompose it into a structured graph of typed nodes.
+            </div>
+            <%= if @architect_error do %>
+              <div class="arch-error">{@architect_error}</div>
+            <% end %>
+            <.form for={%{}} id="architect-form" phx-submit="run_architect">
+              <div class="dlg-field-label">AGENT PROMPT / DESCRIPTION</div>
+              <textarea
+                name="prompt"
+                rows="10"
+                placeholder={"You are a customer support agent for Acme Corp.\nYou help users with billing questions, account issues, and product information.\nAlways be polite and escalate to a human when you cannot resolve the issue.\nRespond in the same language as the user.\n\nContext: {user_message}, {account_info}"}
+                class="dlg-input dlg-textarea dlg-textarea--tall"
+                autofocus
+                required
+              ></textarea>
+              <div class="dlg-actions">
+                <button type="button" phx-click="close_architect" class="dlg-btn dlg-btn--cancel" disabled={@architect_loading}>
+                  Cancel
+                </button>
+                <button type="submit" class="dlg-btn dlg-btn--create" disabled={@architect_loading}>
+                  <%= if @architect_loading do %>
+                    ⟳ Architecting…
+                  <% else %>
+                    ✦ Architect Graph
+                  <% end %>
                 </button>
               </div>
             </.form>

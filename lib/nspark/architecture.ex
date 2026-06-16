@@ -3,13 +3,17 @@ defmodule Nspark.Architecture do
   The agent architecture domain: graphs and their nodes, edges, and immutable
   version snapshots. See docs/HLD.md §4 for the persistence model.
   """
-  use Ash.Domain, otp_app: :nspark, extensions: [AshAdmin.Domain]
+  use Ash.Domain, otp_app: :nspark, extensions: [AshAdmin.Domain, AshPaperTrail.Domain]
 
   alias Nspark.Architecture.{Graph, Node, Edge, GraphVersion}
   import Ash.Query, only: [filter: 2]
 
   admin do
     show? true
+  end
+
+  paper_trail do
+    include_versions? true
   end
 
   resources do
