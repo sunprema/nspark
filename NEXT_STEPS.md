@@ -92,8 +92,13 @@ contract around it.
   identifier on `Graph`, auto-derived from name. Resolver:
   `Nspark.PromptDelivery`; controller: `NsparkWeb.Api.PromptController`.
   Still on bearer-token auth — scoped keys (next item) will replace it.
-- [ ] **Scoped API keys** per project/environment (not just a user bearer token);
-  key issuance + revocation UI; audit of API access.
+- [x] **Scoped API keys** per project/environment (not just a user bearer token);
+  key issuance + revocation UI; audit of API access. Global `Nspark.Accounts.ApiKey`
+  (hashed secret; org + optional project + optional environment scope), `NsparkWeb.ApiKeyAuth`
+  plug on the `:api_runtime` pipeline (key is the principal; env-scoped keys are
+  limited to their env alias), admin-only `/org/api-keys` management screen
+  (issue → show plaintext once, revoke). Audit via `created_by`/`revoked_by`/
+  `last_used_at` columns. (A per-request access log is still future work.)
 - [ ] **Caching + delivery** — strong ETag / `Cache-Control`, immutable pinned
   versions are infinitely cacheable; document a CDN-frontable contract.
 - [ ] **Client SDK** (start with one language) — fetches by pinned version,

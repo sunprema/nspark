@@ -22,6 +22,14 @@ defmodule NsparkWeb.Router do
     plug :set_actor, :user
   end
 
+  # Runtime delivery: a scoped API key (preferred) or a user bearer token.
+  pipeline :api_runtime do
+    plug :accepts, ["json"]
+    plug NsparkWeb.ApiKeyAuth
+    plug :load_from_bearer
+    plug :set_actor, :user
+  end
+
   scope "/", NsparkWeb do
     pipe_through :browser
     live "/svelte_demo", SvelteDemoLive
@@ -41,13 +49,19 @@ defmodule NsparkWeb.Router do
       live "/studio", StudioLive
       live "/studio/:graph_id", StudioLive
       live "/org/members", OrgMembersLive
+      live "/org/api-keys", OrgApiKeysLive
     end
+  end
+
+  scope "/api/v1", NsparkWeb.Api do
+    pipe_through [:api_runtime]
+
+    get "/prompts/:slug", PromptController, :show
   end
 
   scope "/api/v1", NsparkWeb.Api do
     pipe_through [:api]
 
-    get "/prompts/:slug", PromptController, :show
     post "/graphs/:graph_id/compile", GraphController, :compile
     post "/deployments/:deployment_id/run", DeploymentController, :run
   end

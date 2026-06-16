@@ -18,6 +18,14 @@ defmodule Nspark.Accounts do
       define :members_for_org, action: :list_for_org, args: [:organization_id]
     end
 
+    resource Nspark.Accounts.ApiKey do
+      define :issue_api_key, action: :issue
+      define :api_keys_for_org, action: :list_for_org, args: [:organization_id]
+      define :get_api_key_by_hash, action: :get_by_hash, args: [:hash]
+      define :revoke_api_key, action: :revoke
+      define :touch_api_key, action: :touch_last_used
+    end
+
     resource Nspark.Accounts.Invitation do
       define :invite_to_organization, action: :invite
       define :get_invitation_by_token, action: :get_by_token, args: [:token]

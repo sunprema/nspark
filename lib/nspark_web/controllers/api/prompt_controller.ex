@@ -13,9 +13,12 @@ defmodule NsparkWeb.Api.PromptController do
   Returns the compiled prompt, the version's input contract (so a client can
   validate its variables before substituting), version metadata, and stats.
 
-  Authn is the shared bearer-token `:api` pipeline; the tenant is resolved from
-  the caller's memberships. (Scoped, per-environment API keys are the next P0
-  item and will replace user-bearer auth here.)
+  Authn (`:api_runtime` pipeline) accepts either a **scoped API key** (preferred:
+  `Authorization: Bearer nsk_…` or `x-api-key`) or a user bearer token. With a
+  key, the tenant, project, and environment scope come from the key itself
+  (`NsparkWeb.ApiKeyAuth`); a key bound to an environment may only resolve that
+  environment's alias. With a user token, the tenant is resolved from the
+  caller's memberships.
 
   ## Caching
 
@@ -36,27 +39,59 @@ defmodule NsparkWeb.Api.PromptController do
   @immutable_max_age 31_536_000
 
   def show(conn, %{"slug" => slug} = params) do
+    api_key = conn.assigns[:api_key]
     user = conn.assigns[:current_user]
 
     cond do
-      is_nil(user) ->
-        error(conn, 401, "unauthorized")
+      api_key ->
+        with {:ok, qualifier} <- parse_qualifier(params),
+             :ok <- enforce_key_scope(api_key, qualifier) do
+          render_result(conn, resolve_with_key(api_key, slug, qualifier))
+        else
+          {:error, :environment_forbidden} ->
+            error(conn, 403, "api key is not scoped to that environment")
 
-      true ->
+          {:error, msg} ->
+            error(conn, 400, msg)
+        end
+
+      user ->
         case parse_qualifier(params) do
-          {:ok, qualifier} -> resolve_and_render(conn, user, slug, qualifier)
+          {:ok, qualifier} -> render_result(conn, resolve_across_tenants(user, slug, qualifier))
           {:error, msg} -> error(conn, 400, msg)
         end
+
+      true ->
+        error(conn, 401, "unauthorized")
     end
   end
 
-  defp resolve_and_render(conn, user, slug, qualifier) do
-    case resolve_across_tenants(user, slug, qualifier) do
+  defp render_result(conn, result) do
+    case result do
       {:ok, resolved} -> render_prompt(conn, resolved)
       {:error, :prompt_not_found} -> error(conn, 404, "prompt not found")
       {:error, :version_not_found} -> error(conn, 404, "no matching version for prompt")
     end
   end
+
+  # An API key resolves within its own org tenant and (if set) project scope.
+  # The key is the principal, so the read is unauthorized at the Ash layer —
+  # scope is what constrains it.
+  defp resolve_with_key(key, slug, qualifier) do
+    Nspark.PromptDelivery.resolve(slug, qualifier,
+      tenant: key.organization_id,
+      project_id: key.project_id,
+      authorize?: false
+    )
+  end
+
+  # An environment-scoped key may only resolve the environment alias it's bound
+  # to; version/@latest lookups are unaffected.
+  defp enforce_key_scope(%{environment: env}, {:environment, requested})
+       when not is_nil(env) and env != requested,
+       do: {:error, :environment_forbidden}
+
+  defp enforce_key_scope(_key, _qualifier), do: :ok
 
   # Try each org the caller belongs to until the slug resolves. A `prompt_not_found`
   # in one tenant should not mask a hit in another, so only a successful resolve

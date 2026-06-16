@@ -39,12 +39,18 @@ defmodule Nspark.PromptDelivery do
 
     * `{:error, :prompt_not_found}`  — no graph with that slug in the tenant
     * `{:error, :version_not_found}` — qualifier resolved to nothing published/deployed
+
+  Pass `project_id:` in `opts` to additionally constrain the lookup to one
+  project (used by project-scoped API keys); other opts (`tenant`, `actor`,
+  `authorize?`) flow through to the reads.
   """
   @spec resolve(String.t(), qualifier(), keyword()) ::
           {:ok, resolved()} | {:error, :prompt_not_found | :version_not_found}
   def resolve(slug, qualifier, opts) do
-    with {:ok, graph} <- fetch_graph(slug, opts),
-         {:ok, version, via} <- fetch_version(graph, qualifier, opts) do
+    {project_id, ash_opts} = Keyword.pop(opts, :project_id)
+
+    with {:ok, graph} <- fetch_graph(slug, project_id, ash_opts),
+         {:ok, version, via} <- fetch_version(graph, qualifier, ash_opts) do
       {:ok,
        %{
          graph: graph,
@@ -55,8 +61,10 @@ defmodule Nspark.PromptDelivery do
     end
   end
 
-  defp fetch_graph(slug, opts) do
-    case Graph |> filter(slug == ^slug) |> limit(1) |> Ash.read(opts) do
+  defp fetch_graph(slug, project_id, opts) do
+    query = if project_id, do: filter(Graph, project_id == ^project_id), else: Graph
+
+    case query |> filter(slug == ^slug) |> limit(1) |> Ash.read(opts) do
       {:ok, [graph]} -> {:ok, graph}
       {:ok, []} -> {:error, :prompt_not_found}
       {:error, _} -> {:error, :prompt_not_found}
