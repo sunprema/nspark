@@ -32,29 +32,45 @@ defmodule Nspark.Architecture do
 
   @doc """
   Snapshot the current draft (nodes + edges already in DB) into an immutable
-  `GraphVersion`, then bump `graph.graph_version`. Returns `{:ok, version}`.
+  `GraphVersion`, then bump `graph.graph_version`.
+
+  Linked Skill nodes are resolved against the Registry first and their content is
+  **frozen** into the snapshot, so a deployed prompt never changes when a Skill is
+  later edited. The resolved Skill versions are recorded on the version's
+  `resolved_skills` manifest (Knowledge Layer, plan Phase 4).
+
+  Returns `{:ok, version}`, or `{:error, {:unresolved_skills, problems}}` when a
+  linked Skill is missing or deprecated — a graph with broken references must not
+  be publishable.
   """
   def publish_graph(graph, nodes, edges, actor, tenant) do
     opts = [tenant: tenant, actor: actor]
-    snapshot = serialize_snapshot(nodes, edges)
-    version_number = graph.graph_version
+    resolution = Nspark.Registry.resolve_skills(nodes, opts)
 
-    Nspark.Repo.transaction(fn ->
-      version =
-        Ash.create!(
-          GraphVersion,
-          %{
-            graph_id: graph.id,
-            version_number: version_number,
-            graph_snapshot: snapshot,
-            author_id: actor.id
-          },
-          opts
-        )
+    if resolution.problems != [] do
+      {:error, {:unresolved_skills, resolution.problems}}
+    else
+      snapshot = serialize_snapshot(resolution.nodes, edges)
+      version_number = graph.graph_version
 
-      Ash.update!(graph, %{graph_version: version_number + 1}, opts)
-      version
-    end)
+      Nspark.Repo.transaction(fn ->
+        version =
+          Ash.create!(
+            GraphVersion,
+            %{
+              graph_id: graph.id,
+              version_number: version_number,
+              graph_snapshot: snapshot,
+              resolved_skills: resolution.manifest,
+              author_id: actor.id
+            },
+            opts
+          )
+
+        Ash.update!(graph, %{graph_version: version_number + 1}, opts)
+        version
+      end)
+    end
   end
 
   @doc """

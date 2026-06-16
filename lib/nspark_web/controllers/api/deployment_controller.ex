@@ -47,6 +47,7 @@ defmodule NsparkWeb.Api.DeploymentController do
                   deployed_version: dep.deployed_version,
                   prompt: prompt,
                   sub_agent_calls: calls,
+                  resolved_skills: dep.graph_version.resolved_skills,
                   stats: %{
                     token_estimate: compiled.token_estimate,
                     included: compiled.included,

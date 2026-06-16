@@ -41,7 +41,7 @@ Design agent behavior on an interactive canvas. Each node represents a discrete 
 | **Constraint** | Rules, guardrails, and compliance requirements |
 | **Context** | Runtime variables and dynamic data injection |
 | **Conditional** | Branching logic with yes/no routing (diamond shape) |
-| **Skill** | Reusable capability packages |
+| **Skill** | Reusable capability — author once in the Knowledge Registry, link into many graphs |
 | **Memory** | Long-term and episodic knowledge references |
 | **Tool** | External integrations and API calls |
 | **Evaluation** | Self-check and quality validation rules |
@@ -71,30 +71,40 @@ Both branch nodes are standard blueprint nodes — the diamond shape and the `no
 
 ### Compiler
 
-The graph is compiled into model-ready instructions on every change. The compiler:
+The graph is compiled into model-ready instructions on every change. The pipeline:
 
+**Validate → Resolve registry skills → Resolve variables → Topological sort → Assemble.**
+
+- Resolves linked Skills against the registry before assembly, so the compiled prompt always reflects the Skill's current content
+- A missing or deprecated Skill reference fails validation rather than silently producing a wrong prompt
+- Reports which Skill versions it assembled in the compiler output
 - Assembles nodes in dependency order (Persona → Constraints → Context → Skills → Conditionals → Evaluations → Output)
 - Detects circular dependencies, floating nodes, undefined variables, and conflicting instructions
 - Surfaces warnings and errors in a real-time diagnostics panel
 
-### Skill Registry
+### Knowledge Registry
 
-A central repository of reusable skills shared across agents and teams.
+A central repository of reusable Skills shared across graphs and teams. Author a Skill once, link it into many graphs — edit it in one place and every graph that links it picks up the change on its next compile.
 
-- **Linked skills** — live reference; updates propagate globally to all graphs using the skill
-- **Cloned skills** — detached local copy for graph-specific customization
-- Full version history, diff tracking, and rollback support
+- **Create & author** — add a Skill from the registry sidebar (name, description, content), or promote an existing node's content into a Skill in one click ("Save as Skill")
+- **Linked skills** — a linked node owns no content; it resolves from the Skill at compile time, making the Skill the single source of truth. Linked nodes are visually distinct on the canvas and show the resolved content read-only, with a jump-to-source link
+- **Cloned skills** — "Detach" copies the currently-resolved content into the node for graph-specific customization
+- **Lifecycle & versioning** — Skills move through `draft → published → deprecated`. Publishing (admin-only) cuts a new version; deprecated Skills fail graph validation. Editors author and edit content; admins publish and archive. Every change is captured in the audit trail
+- **Dependency awareness** — before editing shared logic, see a Skill's blast radius: how many nodes link it, which graphs consume it, and which live deployments depend on it
 
 ### AI Architect
 
-A natural-language copilot embedded in the studio. Ask it to:
+A natural-language copilot embedded in the studio. Describe an agent and it
+decomposes the prompt into a structured graph of typed nodes and dependency
+edges — modifying graph structure directly rather than editing raw text.
 
-- "Add a rule requiring citations for all claims"
-- "Find all nodes referencing inventory logic"
-- "Convert duplicated instructions into a reusable skill"
-- "Reduce prompt size by 20%"
+### Registry Intelligence
 
-The Architect modifies graph structure directly rather than editing raw text.
+The studio proactively keeps shared logic DRY:
+
+- **Refactor duplicates** — detects copy-pasted Skill content across graphs and surfaces a "✦ N reusable patterns found" suggestion
+- **Extract as shared Skill** — one click hoists a duplicated pattern into a single Skill and links every matching node across graphs
+- **Blast-radius awareness** — before editing or extracting, see how many nodes, graphs, and live deployments a Skill touches
 
 ### Prompt-to-Graph Import
 
@@ -107,6 +117,7 @@ Deploy any graph version as a callable API endpoint.
 - **Environments:** Development, Staging, Production
 - **Runtime variable injection:** POST a JSON payload; the compiled graph resolves `{variable}` placeholders at call time
 - **Version pinning:** Applications lock to a specific graph version for stability
+- **Frozen skill content:** publishing freezes the resolved Skill content into the version snapshot and records the exact Skill versions it pinned. A deployed prompt never changes when a Skill is later edited — the change reaches a deployment only on its next publish, keeping deployments immutable and reproducible
 
 ### Organization & Access Control
 
@@ -165,11 +176,12 @@ This creates an "Nspark Demo" org with an "Agent Planner" graph containing a ful
 ```
 lib/
   nspark/
-    architecture/     # Graph, Node, Edge resources
-    registry/         # Skill, Schema, Policy, Memory Template
+    architecture/     # Graph, Node, Edge, GraphVersion resources
+    registry/         # Skill, Schema, Policy, Memory Template resources
+    registry.ex       # Skill resolution, usage tracking & duplicate detection
     deployments/      # Deployment resource and versioning
-    compiler.ex       # Graph → prompt compilation
-    architect.ex      # AI Architect worker
+    compiler.ex       # Graph → prompt compilation (resolves linked skills)
+    architect.ex      # AI Architect — NL → graph decomposition
     diagnostics.ex    # Real-time graph validation
   nspark_web/
     live/
