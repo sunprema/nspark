@@ -51,6 +51,7 @@ defmodule Nspark.Architecture do
       {:error, {:unresolved_skills, resolution.problems}}
     else
       snapshot = serialize_snapshot(resolution.nodes, edges)
+      contract = Nspark.VersionDiff.contract(snapshot)
       version_number = graph.graph_version
 
       Nspark.Repo.transaction(fn ->
@@ -62,6 +63,7 @@ defmodule Nspark.Architecture do
               version_number: version_number,
               graph_snapshot: snapshot,
               resolved_skills: resolution.manifest,
+              input_contract: contract,
               author_id: actor.id
             },
             opts

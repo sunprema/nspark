@@ -271,13 +271,9 @@ defmodule Nspark.Diagnostics do
 
   defp vars_in(nodes), do: Enum.flat_map(nodes, &vars_in_node/1)
 
-  defp vars_in_node(%{content: c}) when is_binary(c),
-    do: ~r/\{([a-zA-Z_]\w*)\}/ |> Regex.scan(c) |> Enum.map(fn [_, n] -> n end)
-
-  defp vars_in_node(%{"content" => c}) when is_binary(c),
-    do: ~r/\{([a-zA-Z_]\w*)\}/ |> Regex.scan(c) |> Enum.map(fn [_, n] -> n end)
-
-  defp vars_in_node(_), do: []
+  # Delegates to the single canonical variable definition so this check and the
+  # published input contract can never disagree on what counts as a variable.
+  defp vars_in_node(node), do: node |> node_content() |> Nspark.VersionDiff.variables_in()
 
   defp node_content(%{content: c}), do: c
   defp node_content(%{"content" => c}), do: c
