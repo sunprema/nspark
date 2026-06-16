@@ -47,6 +47,7 @@ defmodule NsparkWeb.Router do
   scope "/api/v1", NsparkWeb.Api do
     pipe_through [:api]
 
+    get "/prompts/:slug", PromptController, :show
     post "/graphs/:graph_id/compile", GraphController, :compile
     post "/deployments/:deployment_id/run", DeploymentController, :run
   end

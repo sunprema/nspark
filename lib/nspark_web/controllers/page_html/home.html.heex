@@ -394,8 +394,8 @@
             </svg>
           </div>
           <h3 style="font-size: 18px; font-weight: 700; margin: 0 0 12px;">Deploy to Production</h3>
-          <p style="font-size: 14px; line-height: 1.7; color: oklch(0.44 0.02 255); margin: 0 0 20px;">Publish a versioned snapshot. Deploy to Dev, Staging, or Production environments. Your applications call a runtime API endpoint — no embedded prompts.</p>
-          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: oklch(0.55 0.12 155); letter-spacing: 0.08em;">3 environments &rarr; one runtime API</div>
+          <p style="font-size: 14px; line-height: 1.7; color: oklch(0.44 0.02 255); margin: 0 0 20px;">Publish an immutable snapshot — gated against breaking changes. Apps fetch a pinned prompt by slug and validate their inputs against its published contract. No embedded prompts.</p>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: oklch(0.55 0.12 155); letter-spacing: 0.08em;">pinned versions &rarr; validated contract</div>
         </div>
       </div>
     </div>
@@ -454,11 +454,12 @@
               <h3 style="font-size: 16px; font-weight: 700; margin: 0;">Knowledge Registry</h3>
             </div>
           </div>
-          <p style="font-size: 13.5px; line-height: 1.7; color: oklch(0.44 0.02 255); margin: 0 0 20px;">A central repository for Skills, Policies, Output Schemas, and Memory Templates. Linked skills update everywhere they're used. Versioned. Diffable. Rollback-ready.</p>
+          <p style="font-size: 13.5px; line-height: 1.7; color: oklch(0.44 0.02 255); margin: 0 0 20px;">Skills, Policies, Output Schemas, and Memory Templates in one place. Linked skills resolve at compile time and update everywhere at once, with a draft → published → deprecated lifecycle. See a skill's blast radius before you edit; extract duplicated logic into a shared skill in one click.</p>
           <div style="display: flex; flex-wrap: wrap; gap: 6px;">
             <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Linked / Cloned</span>
-            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Versioned</span>
-            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Cross-project</span>
+            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Lifecycle</span>
+            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Blast-radius</span>
+            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Auto-dedup</span>
           </div>
         </div>
 
@@ -488,10 +489,10 @@
               <h3 style="font-size: 16px; font-weight: 700; margin: 0;">Graph Versioning</h3>
             </div>
           </div>
-          <p style="font-size: 13.5px; line-height: 1.7; color: oklch(0.44 0.02 255); margin: 0 0 20px;">Every publish creates an immutable snapshot — graph, dependencies, and compiler output together. Visual diff viewer. One-click rollback. Full audit trail for compliance and governance.</p>
+          <p style="font-size: 13.5px; line-height: 1.7; color: oklch(0.44 0.02 255); margin: 0 0 20px;">Every publish is an immutable snapshot, diffed against the last version and classified breaking, compatible, or cosmetic. A breaking change is blocked unless acknowledged with a changelog. Visual diff viewer, one-click rollback, full audit trail.</p>
           <div style="display: flex; flex-wrap: wrap; gap: 6px;">
-            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Immutable snapshots</span>
-            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Visual diff</span>
+            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Semantic diff</span>
+            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Breaking-change gate</span>
             <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Rollback</span>
           </div>
         </div>
@@ -505,11 +506,68 @@
               <h3 style="font-size: 16px; font-weight: 700; margin: 0;">Runtime Deployment</h3>
             </div>
           </div>
-          <p style="font-size: 13.5px; line-height: 1.7; color: oklch(0.44 0.02 255); margin: 0 0 20px;">Deploy any graph as a JSON API endpoint. Applications inject runtime variables and receive compiled, model-ready instructions. Version pinning ensures deployments never drift unexpectedly.</p>
+          <p style="font-size: 13.5px; line-height: 1.7; color: oklch(0.44 0.02 255); margin: 0 0 20px;">Apps fetch a prompt by stable slug — pinned to an exact version, <code style="font-family: 'IBM Plex Mono', monospace;">@latest</code>, or whatever's live in an environment — then inject their own variables. Responses ship the input contract and a strong ETag; pinned versions are immutable and infinitely cacheable.</p>
           <div style="display: flex; flex-wrap: wrap; gap: 6px;">
-            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Dev/Staging/Prod</span>
-            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">REST API</span>
-            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Version pinning</span>
+            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Pinned retrieval</span>
+            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">Input contract</span>
+            <span class="pill" style="color: oklch(0.44 0.02 255); border-color: oklch(0.82 0.02 250);">ETag cache</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== GOVERNANCE & CONTRACTS ========== -->
+  <section style="padding: 96px 32px; background: oklch(0.985 0.004 245); border-top: 1px solid oklch(0.88 0.008 250);">
+    <div style="max-width: 1280px; margin: 0 auto;">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center;">
+
+        <!-- Copy -->
+        <div>
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.2em; color: oklch(0.55 0.02 250); margin-bottom: 12px;">GOVERNANCE &middot; CONTRACTS</div>
+          <h2 style="font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 20px; line-height: 1.2;">
+            Ship prompt changes without<br/>
+            <span style="color: oklch(0.55 0.13 255);">breaking production.</span>
+          </h2>
+          <p style="font-size: 15px; line-height: 1.7; color: oklch(0.44 0.02 255); margin: 0 0 32px;">Every published version exposes an input contract — the variables a calling app must supply. Each edit is diffed against the previous version and classified, so a change that would break a live deployment can't ship silently.</p>
+
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <%= for {label, color, desc} <- [
+              {"BREAKING", "oklch(0.55 0.14 28)", "A new required variable, a rename, or a dropped output. Blocked at publish unless acknowledged with a changelog."},
+              {"COMPATIBLE", "oklch(0.55 0.12 155)", "A removed variable, a new output, or a provider change. Ships freely."},
+              {"COSMETIC", "oklch(0.52 0.13 300)", "Content and layout edits with no contract impact."}
+            ] do %>
+              <div style="display: flex; gap: 14px; align-items: flex-start;">
+                <span style={"font-family: 'IBM Plex Mono', monospace; font-size: 9px; font-weight: 600; letter-spacing: 0.12em; color: #{color}; border: 1px solid #{color}; padding: 4px 8px; white-space: nowrap; flex-shrink: 0; min-width: 92px; text-align: center;"}><%= label %></span>
+                <span style="font-size: 13px; line-height: 1.6; color: oklch(0.44 0.02 255);"><%= desc %></span>
+              </div>
+            <% end %>
+          </div>
+        </div>
+
+        <!-- Terminal mockup: publish gate + retrieval -->
+        <div style="background: oklch(0.18 0.02 255); border: 1px solid oklch(0.32 0.025 255); font-family: 'IBM Plex Mono', monospace; font-size: 12px;">
+          <div style="padding: 12px 16px; border-bottom: 1px solid oklch(0.32 0.025 255); display: flex; align-items: center; gap: 8px;">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: oklch(0.55 0.14 28 / 0.6);"></div>
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: oklch(0.62 0.13 78 / 0.6);"></div>
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: oklch(0.55 0.12 155 / 0.6);"></div>
+            <span style="color: oklch(0.45 0.02 250); margin-left: 8px; font-size: 11px;">nspark &mdash; publish gate</span>
+          </div>
+          <div style="padding: 24px; line-height: 1.9; color: oklch(0.65 0.015 250);">
+            <div style="color: oklch(0.5 0.02 250); margin-bottom: 8px;">&gt; Diffing support_agent &nbsp;v2 &rarr; v3</div>
+            <div style="color: oklch(0.6 0.13 28);">✗ breaking &nbsp;&nbsp;+ required var &#123;account_tier&#125;</div>
+            <div style="color: oklch(0.6 0.13 28);">✗ breaking &nbsp;&nbsp;output renamed result &rarr; decision</div>
+            <div style="color: oklch(0.55 0.12 155);">✓ compatible &nbsp;+ output &#123;confidence&#125;</div>
+            <div style="color: oklch(0.55 0.05 300);">&middot; cosmetic &nbsp;&nbsp;persona edited &middot; 3 lines</div>
+            <div style="color: oklch(0.62 0.13 78); margin-top: 8px;">⊘ Publish blocked &mdash; acknowledge + changelog required</div>
+
+            <div style="height: 1px; background: oklch(0.32 0.025 255); margin: 16px 0;"></div>
+
+            <div style="color: oklch(0.5 0.02 250); margin-bottom: 8px;">&gt; GET /api/v1/prompts/support_agent?version=2</div>
+            <div style="color: oklch(0.65 0.13 255);">200 &middot; etag "9f3a…" &middot; immutable</div>
+            <div style="color: oklch(0.55 0.12 155);">✓ contract: customer_name (required)</div>
+            <div style="color: oklch(0.4 0.02 250); margin-top: 12px;">&gt; <span class="cursor-blink">_</span></div>
           </div>
         </div>
 
