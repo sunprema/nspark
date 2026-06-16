@@ -57,7 +57,7 @@ defmodule Nspark.Compiler do
   def compile(nodes, edges \\ [], opts \\ []) do
     provider = Keyword.get(opts, :provider, :anthropic)
     resolved_assets = Keyword.get(opts, :resolved_assets, [])
-    active = Enum.reject(nodes, & &1.is_muted)
+    active = Enum.reject(nodes, &node_muted?/1)
     cond_contexts = build_conditional_contexts(active, edges)
 
     raw =
@@ -97,7 +97,7 @@ defmodule Nspark.Compiler do
   @doc "Returns `%{node_id => compile_position}` (1-based) for active (non-muted) nodes."
   @spec node_order([map()], [map()]) :: %{String.t() => pos_integer()}
   def node_order(nodes, edges \\ []) do
-    active = Enum.reject(nodes, & &1.is_muted)
+    active = Enum.reject(nodes, &node_muted?/1)
 
     @order
     |> Enum.flat_map(fn {type, _heading} ->
@@ -179,6 +179,12 @@ defmodule Nspark.Compiler do
   defp node_id(%{id: id}), do: id
   defp node_id(%{"id" => id}), do: id
   defp node_id(n), do: inspect(n)
+
+  # Muted flag, tolerant of both atom-keyed live nodes and string-keyed snapshot
+  # nodes (`serialize_snapshot/2`). Missing/`nil` means not muted.
+  defp node_muted?(%{is_muted: m}), do: m == true
+  defp node_muted?(%{"is_muted" => m}), do: m == true
+  defp node_muted?(_), do: false
 
   defp node_type(%{type: t}), do: t
   defp node_type(%{"type" => t}) when is_atom(t), do: t

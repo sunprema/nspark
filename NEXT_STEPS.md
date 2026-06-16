@@ -84,10 +84,14 @@ If our service is slow or down, the customer's app breaks. Enterprise will not
 accept that. `/compile` returning a string is the seed; it needs a real delivery
 contract around it.
 
-- [ ] **Pinned-version retrieval endpoint** — `GET /api/v1/prompts/:slug?version=N`
-  (and `@latest` / environment alias e.g. `@production`). Returns the resolved
-  prompt + its input schema + version metadata + an ETag. This, not `/run`, is
-  the primary product surface.
+- [x] **Pinned-version retrieval endpoint** — `GET /api/v1/prompts/:slug?version=N`
+  (and `@latest` / environment alias e.g. `@production`, or `?environment=production`).
+  Returns the resolved prompt + its input schema + version metadata + a strong
+  ETag (with `If-None-Match`/304 + immutable `Cache-Control` on pinned versions).
+  This, not `/run`, is the primary product surface. Slug is a stable per-org
+  identifier on `Graph`, auto-derived from name. Resolver:
+  `Nspark.PromptDelivery`; controller: `NsparkWeb.Api.PromptController`.
+  Still on bearer-token auth — scoped keys (next item) will replace it.
 - [ ] **Scoped API keys** per project/environment (not just a user bearer token);
   key issuance + revocation UI; audit of API access.
 - [ ] **Caching + delivery** — strong ETag / `Cache-Control`, immutable pinned

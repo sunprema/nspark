@@ -119,6 +119,22 @@ Deploy any graph version as a callable API endpoint.
 - **Version pinning:** Applications lock to a specific graph version for stability
 - **Frozen skill content:** publishing freezes the resolved Skill content into the version snapshot and records the exact Skill versions it pinned. A deployed prompt never changes when a Skill is later edited — the change reaches a deployment only on its next publish, keeping deployments immutable and reproducible
 
+### Prompt Retrieval API
+
+The primary runtime surface: your application fetches a published prompt by its
+stable slug and injects its own variables — no execution on our side.
+
+```
+GET /api/v1/prompts/:slug                       # latest published version
+GET /api/v1/prompts/:slug?version=5             # an exact, immutable version
+GET /api/v1/prompts/:slug?environment=production # whatever is live in an env
+```
+
+- **Stable slug:** every graph has a readable, durable identifier (auto-derived from its name) that callers reference instead of an opaque id
+- **Version & environment resolution:** pin to an exact version number, follow `@latest`, or track whatever is currently deployed to an environment
+- **Published input contract:** each response carries the `{variables}` the prompt requires and the outputs it produces, so a client can validate its inputs before substituting — a prompt edit can't silently break a calling app
+- **CDN-friendly caching:** responses ship a strong `ETag`; exact pinned versions are returned `immutable` and infinitely cacheable, while moving aliases revalidate cheaply via `If-None-Match` → `304`
+
 ### Organization & Access Control
 
 - Multi-organization support with invite-only onboarding
@@ -181,6 +197,7 @@ lib/
     registry.ex       # Skill resolution, usage tracking & duplicate detection
     deployments/      # Deployment resource and versioning
     compiler.ex       # Graph → prompt compilation (resolves linked skills)
+    prompt_delivery.ex # Runtime retrieval: slug + version/env → compiled prompt
     architect.ex      # AI Architect — NL → graph decomposition
     diagnostics.ex    # Real-time graph validation
   nspark_web/

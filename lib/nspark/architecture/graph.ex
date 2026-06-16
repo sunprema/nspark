@@ -30,8 +30,24 @@ defmodule Nspark.Architecture.Graph do
     attribute :organization_id
   end
 
+  # Stable per-org slug. The tenant attribute is folded into the uniqueness
+  # constraint automatically, so the same slug may exist in different orgs.
+  identities do
+    identity :unique_slug, [:slug]
+  end
+
   actions do
-    defaults [:read, :destroy, create: :*, update: :*]
+    defaults [:read, :destroy, update: :*]
+
+    create :create do
+      primary? true
+      accept [:name, :description, :graph_version, :project_id, :slug]
+
+      # Derive a readable slug from the name when one isn't supplied, then
+      # disambiguate against existing slugs in the same org. The :unique_slug
+      # identity is the DB-level backstop against races.
+      change Nspark.Architecture.Changes.EnsureGraphSlug
+    end
   end
 
   policies do
@@ -56,6 +72,13 @@ defmodule Nspark.Architecture.Graph do
     uuid_primary_key :id
 
     attribute :name, :string do
+      allow_nil? false
+      public? true
+    end
+
+    # Stable, URL-safe identifier used by the runtime retrieval endpoint
+    # (`GET /api/v1/prompts/:slug`). Auto-derived from `name` on create.
+    attribute :slug, :string do
       allow_nil? false
       public? true
     end

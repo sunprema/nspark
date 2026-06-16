@@ -80,7 +80,10 @@ defmodule NsparkWeb.StudioLive do
      # architect
      |> assign(:show_architect_modal, false)
      |> assign(:architect_loading, false)
-     |> assign(:architect_error, nil)}
+     |> assign(:architect_error, nil)
+     # version diff (semantic graph diff, plan Phase 4)
+     |> assign(:version_diff, nil)
+     |> assign(:breaking_publish, nil)}
   end
 
   @impl true
@@ -637,34 +640,48 @@ defmodule NsparkWeb.StudioLive do
 
   # ── publish / version restore ───────────────────────────────────────────────
 
-  def handle_event("publish", _params, socket) do
-    %{graph: graph, nodes: nodes} = socket.assigns
-    # Fetch current edges (not in top-level assigns)
-    opts = ash_opts(socket)
-    edges = Edge |> filter(graph_id == ^graph.id) |> Ash.read!(opts)
+  def handle_event("publish", _params, socket), do: run_publish(socket, [])
 
-    case Nspark.Architecture.publish_graph(graph, nodes, edges, socket.assigns.current_user, socket.assigns.org_id) do
-      {:ok, version} ->
-        updated_graph = Ash.reload!(graph, opts)
+  def handle_event("cancel_breaking_publish", _params, socket) do
+    {:noreply, assign(socket, :breaking_publish, nil)}
+  end
 
-        {:noreply,
-         socket
-         |> assign(:graph, updated_graph)
-         |> assign(:graph_dirty, false)
-         |> load_versions()
-         |> put_flash(:info, "Published v#{version.version_number}")}
+  def handle_event("breaking_changelog_change", %{"changelog" => cl}, socket) do
+    {:noreply, update(socket, :breaking_publish, fn bp -> bp && %{bp | changelog: cl, error: nil} end)}
+  end
 
-      {:error, {:unresolved_skills, problems}} ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "Can't publish: #{length(problems)} linked Skill#{if length(problems) > 1, do: "s"} could not be resolved. Fix the highlighted nodes first."
-         )}
+  def handle_event("confirm_breaking_publish", %{"changelog" => cl}, socket) do
+    socket = update(socket, :breaking_publish, fn bp -> bp && %{bp | changelog: cl} end)
+    run_publish(socket, acknowledge_breaking: true, changelog: cl)
+  end
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Publish failed: #{inspect(reason)}")}
+  # ── version diff modal ──────────────────────────────────────────────────────
+
+  def handle_event("open_version_diff", %{"id" => id}, socket) do
+    case Enum.find(socket.assigns.graph_versions, &(&1.id == id)) do
+      nil ->
+        {:noreply, socket}
+
+      version ->
+        base = predecessor(socket.assigns.graph_versions, version)
+        {:noreply, assign(socket, :version_diff, %{version: version, base: base, diff: normalize_diff(version.diff_summary)})}
     end
+  end
+
+  def handle_event("recompute_version_diff", %{"base" => base_id}, socket) do
+    vd = socket.assigns.version_diff
+    base = Enum.find(socket.assigns.graph_versions, &(&1.id == base_id))
+
+    if vd && base && base.id != vd.version.id do
+      diff = Nspark.VersionDiff.diff(base.graph_snapshot, vd.version.graph_snapshot)
+      {:noreply, assign(socket, :version_diff, %{vd | base: base, diff: normalize_diff(diff)})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_version_diff", _params, socket) do
+    {:noreply, assign(socket, :version_diff, nil)}
   end
 
   def handle_event("restore_version", %{"id" => version_id}, socket) do
@@ -824,6 +841,100 @@ defmodule NsparkWeb.StudioLive do
         socket |> assign(:graph_versions, versions) |> assign(:graph_dirty, dirty)
     end
   end
+
+  # Publish the current canvas with the given publish opts (`:acknowledge_breaking`,
+  # `:changelog`). A breaking change opens the ack/changelog modal instead of
+  # publishing; a successful publish closes it.
+  defp run_publish(socket, publish_opts) do
+    %{graph: graph, nodes: nodes} = socket.assigns
+    opts = ash_opts(socket)
+    edges = Edge |> filter(graph_id == ^graph.id) |> Ash.read!(opts)
+
+    case Nspark.Architecture.publish_graph(graph, nodes, edges, socket.assigns.current_user, socket.assigns.org_id, publish_opts) do
+      {:ok, version} ->
+        updated_graph = Ash.reload!(graph, opts)
+
+        {:noreply,
+         socket
+         |> assign(:graph, updated_graph)
+         |> assign(:graph_dirty, false)
+         |> assign(:breaking_publish, nil)
+         |> load_versions()
+         |> put_flash(:info, "Published v#{version.version_number}")}
+
+      {:error, {:unresolved_skills, problems}} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Can't publish: #{length(problems)} linked Skill#{if length(problems) > 1, do: "s"} could not be resolved. Fix the highlighted nodes first."
+         )}
+
+      {:error, {:breaking_change, diff}} ->
+        {:noreply, assign(socket, :breaking_publish, %{diff: normalize_diff(diff), changelog: "", error: nil})}
+
+      {:error, {:changelog_required, diff}} ->
+        changelog = (socket.assigns[:breaking_publish] && socket.assigns.breaking_publish.changelog) || ""
+
+        {:noreply,
+         assign(socket, :breaking_publish, %{
+           diff: normalize_diff(diff),
+           changelog: changelog,
+           error: "A changelog naming the break is required."
+         })}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Publish failed: #{inspect(reason)}")}
+    end
+  end
+
+  # The published version immediately preceding `version` (highest version_number
+  # below it), or nil for the first version.
+  defp predecessor(versions, version) do
+    case Enum.filter(versions, &(&1.version_number < version.version_number)) do
+      [] -> nil
+      lower -> Enum.max_by(lower, & &1.version_number)
+    end
+  end
+
+  defp other_versions(versions, version), do: Enum.reject(versions, &(&1.id == version.id))
+
+  defp node_in_draft?(nodes, id), do: Enum.any?(nodes, &(&1.id == id))
+
+  # Coerce a diff map (stored `diff_summary` with string values, or a freshly
+  # computed `VersionDiff.diff/2` with atom values) into a uniform, fully-keyed
+  # string-valued shape the template can render without nil/atom surprises.
+  defp normalize_diff(diff) do
+    diff = diff || %{}
+
+    %{
+      "level" => to_string(diff["level"] || "cosmetic"),
+      "reasons" => diff["reasons"] || [],
+      "variables" => %{
+        "added" => get_in(diff, ["variables", "added"]) || [],
+        "removed" => get_in(diff, ["variables", "removed"]) || [],
+        "renamed" => get_in(diff, ["variables", "renamed"]) || []
+      },
+      "outputs" => %{
+        "added" => get_in(diff, ["outputs", "added"]) || [],
+        "removed" => get_in(diff, ["outputs", "removed"]) || []
+      },
+      "provider" => diff["provider"],
+      "nodes" => Enum.map(diff["nodes"] || [], &Map.put(&1, "change", to_string(&1["change"])))
+    }
+  end
+
+  defp version_diff_level(summary), do: to_string((summary || %{})["level"] || "cosmetic")
+
+  defp version_badge_class("breaking"), do: "vbadge vbadge--breaking"
+  defp version_badge_class("compatible"), do: "vbadge vbadge--compatible"
+  defp version_badge_class("initial"), do: "vbadge vbadge--initial"
+  defp version_badge_class(_), do: "vbadge vbadge--cosmetic"
+
+  defp version_badge_label("breaking"), do: "⚠ breaking"
+  defp version_badge_label("compatible"), do: "~ compatible"
+  defp version_badge_label("initial"), do: "★ initial"
+  defp version_badge_label(_), do: "· cosmetic"
 
   defp create_node(type_atom, pos, socket) do
     base_meta = %{"position" => pos}
@@ -1855,12 +1966,24 @@ defmodule NsparkWeb.StudioLive do
                   <div class="versions-list">
                     <div :for={v <- @graph_versions} class="version-row">
                       <span class="version-num">v{v.version_number}</span>
+                      <span class={version_badge_class(version_diff_level(v.diff_summary))}>
+                        {version_badge_label(version_diff_level(v.diff_summary))}
+                      </span>
                       <span class="version-date">{Calendar.strftime(v.inserted_at, "%b %d")}</span>
                       <span
                         :if={v.resolved_skills != []}
                         class="version-skills"
                         title={version_skills_title(v.resolved_skills)}
                       >▦ {length(v.resolved_skills)}</span>
+                      <button
+                        type="button"
+                        phx-click="open_version_diff"
+                        phx-value-id={v.id}
+                        class="version-diff-btn"
+                        title="What changed in this version"
+                      >
+                        Diff
+                      </button>
                       <button
                         type="button"
                         phx-click="restore_version"
@@ -2205,6 +2328,140 @@ defmodule NsparkWeb.StudioLive do
                   <% else %>
                     ✦ Architect Graph
                   <% end %>
+                </button>
+              </div>
+            </.form>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Version diff viewer (semantic graph diff, plan Phase 4) --%>
+      <%= if @version_diff do %>
+        <div class="dlg-overlay">
+          <div class="dlg-backdrop" phx-click="close_version_diff"></div>
+          <div class="dlg-box dlg-box--wide">
+            <div class="dlg-head">
+              <span class={version_badge_class(@version_diff.diff["level"])}>
+                {version_badge_label(@version_diff.diff["level"])}
+              </span>
+              {if @version_diff.base,
+                do: "v#{@version_diff.base.version_number} → v#{@version_diff.version.version_number}",
+                else: "v#{@version_diff.version.version_number} · initial"}
+            </div>
+            <div class="dlg-sub">What changed in this version, derived from the frozen contract.</div>
+
+            <div :if={@version_diff.base} class="vdiff-compare">
+              <span class="vdiff-compare-label">Compare against</span>
+              <form phx-change="recompute_version_diff">
+                <select name="base" class="dlg-input vdiff-select">
+                  <option
+                    :for={o <- other_versions(@graph_versions, @version_diff.version)}
+                    value={o.id}
+                    selected={o.id == @version_diff.base.id}
+                  >v{o.version_number}</option>
+                </select>
+              </form>
+            </div>
+
+            <div :if={@version_diff.diff["reasons"] != []} class="vdiff-reasons">
+              <div :for={r <- @version_diff.diff["reasons"]} class="vdiff-reason">{r}</div>
+            </div>
+
+            <div class="vdiff-grid">
+              <div class="vdiff-col">
+                <div class="dlg-field-label">VARIABLES</div>
+                <div
+                  :if={
+                    @version_diff.diff["variables"]["added"] == [] and
+                      @version_diff.diff["variables"]["removed"] == [] and
+                      @version_diff.diff["variables"]["renamed"] == []
+                  }
+                  class="vdiff-none"
+                >No change</div>
+                <span :for={x <- @version_diff.diff["variables"]["added"]} class="vchip vchip--add">+ {x}</span>
+                <span :for={x <- @version_diff.diff["variables"]["removed"]} class="vchip vchip--del">− {x}</span>
+                <span :for={r <- @version_diff.diff["variables"]["renamed"]} class="vchip vchip--rename">
+                  {r["from"]} → {r["to"]}
+                </span>
+              </div>
+              <div class="vdiff-col">
+                <div class="dlg-field-label">OUTPUTS</div>
+                <div
+                  :if={@version_diff.diff["outputs"]["added"] == [] and @version_diff.diff["outputs"]["removed"] == []}
+                  class="vdiff-none"
+                >No change</div>
+                <span :for={x <- @version_diff.diff["outputs"]["added"]} class="vchip vchip--add">+ {x}</span>
+                <span :for={x <- @version_diff.diff["outputs"]["removed"]} class="vchip vchip--del">− {x}</span>
+              </div>
+            </div>
+
+            <div :if={@version_diff.diff["provider"]} class="vdiff-provider">
+              Provider: {@version_diff.diff["provider"]["from"]} → {@version_diff.diff["provider"]["to"]}
+            </div>
+
+            <div class="dlg-field-label">NODE CHANGES</div>
+            <div :if={@version_diff.diff["nodes"] == []} class="vdiff-none">
+              No structural or content changes.
+            </div>
+            <div :for={n <- @version_diff.diff["nodes"]} class="vdiff-node">
+              <button
+                type="button"
+                class="vdiff-node-head"
+                phx-click={node_in_draft?(@nodes, n["id"]) && "select_node"}
+                phx-value-id={n["id"]}
+                disabled={!node_in_draft?(@nodes, n["id"])}
+              >
+                <span class={"vnode-tag vnode-tag--" <> n["change"]}>{n["change"]}</span>
+                <span class="vdiff-node-label">{n["label"] || n["id"]}</span>
+                <span :if={n["change"] == "retyped"} class="vdiff-retype">{n["from"]} → {n["to"]}</span>
+              </button>
+              <div :if={n["change"] == "content" && n["diff"]} class="vdiff-lines">
+                <div :for={l <- n["diff"]["removed_lines"]} class="vline vline--del">− {l}</div>
+                <div :for={l <- n["diff"]["added_lines"]} class="vline vline--add">+ {l}</div>
+              </div>
+            </div>
+
+            <div class="dlg-actions">
+              <button type="button" phx-click="close_version_diff" class="dlg-btn dlg-btn--cancel">Close</button>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Breaking-change publish gate: acknowledge + changelog (plan Phase 4) --%>
+      <%= if @breaking_publish do %>
+        <div class="dlg-overlay">
+          <div class="dlg-backdrop" phx-click="cancel_breaking_publish"></div>
+          <div class="dlg-box dlg-box--wide">
+            <div class="dlg-head">
+              <span class="vbadge vbadge--breaking">⚠ breaking</span> PUBLISH BREAKING CHANGE
+            </div>
+            <div class="dlg-sub">
+              This version changes the input/output contract in a way that can break apps
+              calling the current version. Describe the break to proceed.
+            </div>
+            <div class="vdiff-reasons">
+              <div :for={r <- @breaking_publish.diff["reasons"]} class="vdiff-reason">{r}</div>
+            </div>
+            <.form for={%{}} id="breaking-publish-form" phx-submit="confirm_breaking_publish" phx-change="breaking_changelog_change">
+              <div class="dlg-field-label">CHANGELOG · required</div>
+              <textarea
+                name="changelog"
+                rows="3"
+                placeholder="Name the break, e.g. 'Now requires {company}; callers must supply it.'"
+                class="dlg-input dlg-textarea"
+              >{@breaking_publish.changelog}</textarea>
+              <div :if={@breaking_publish.error} class="vdiff-error">{@breaking_publish.error}</div>
+              <div class="dlg-actions">
+                <button type="button" phx-click="cancel_breaking_publish" class="dlg-btn dlg-btn--cancel">
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  class="dlg-btn dlg-btn--create"
+                  disabled={String.trim(@breaking_publish.changelog || "") == ""}
+                >
+                  Publish anyway
                 </button>
               </div>
             </.form>

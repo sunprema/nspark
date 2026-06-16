@@ -77,6 +77,25 @@ defmodule Nspark.Architecture.GraphVersion do
       public? true
     end
 
+    # The version's frozen input/output contract (`Nspark.VersionDiff.contract/1`):
+    # the `{variables}` a calling app must supply and the `output_var`s produced.
+    # Exposed on read so an SDK/client can validate its inputs before calling.
+    attribute :input_contract, :map do
+      allow_nil? false
+      default %{}
+      public? true
+    end
+
+    # The classified diff of this version vs the immediately preceding one
+    # (`Nspark.VersionDiff.diff/2`): `%{"level", "variables", "outputs", ...}`.
+    # `%{"level" => "initial"}` for the first version. Denormalized cache for O(1)
+    # history rendering — always recomputable from two snapshots.
+    attribute :diff_summary, :map do
+      allow_nil? false
+      default %{}
+      public? true
+    end
+
     # Loose reference to the authoring user. Promoted to a managed relationship
     # once User<->Organization membership is formalized.
     attribute :author_id, :uuid do
