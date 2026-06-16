@@ -2,151 +2,198 @@
 
 Status snapshot and prioritized backlog. Reflects the codebase as of 2026-06-16.
 
+## Positioning (read this first)
+
+Newtonian Spark is a **prompt externalization + governance platform for the
+enterprise**. The job: get prompts out of hardcoded strings buried in
+application code and into a managed service where they can be **versioned,
+validated, governed, and fetched at runtime**. The calling application asks our
+service for "the prompt for version X" and injects its own runtime variables.
+
+This is the "LaunchDarkly for prompts" category (peers: Humanloop, Langfuse,
+PromptLayer, Vellum, Braintrust). The buyer is a platform/governance team that
+curates prompts many apps depend on.
+
+**Three things sell this product. Everything else is supporting cast:**
+
+1. **Reliable runtime delivery** — apps fetch prompts from us in their critical
+   path. Pinned versions, caching, graceful degradation, an SDK.
+2. **A strict variable/version contract** — a prompt edit must never silently
+   break a calling app. Each published version exposes an input schema the client
+   validates against.
+3. **Real evaluation** — "is this prompt good?" must mean behavioral testing
+   (test cases, regression runs, scoring), not just static lint.
+
+The visual graph + compiler + diagnostics are the right *substrate* for (2) and
+(3) — a structured graph can publish a contract and attach tests in a way a text
+file never could. That's the moat. Lean into it.
+
+---
+
 ## Where we are
 
 **Domains (Ash, attribute multitenancy on `organization_id`):**
 
-- `Nspark.Accounts` — `Organization` (tenant root, global), `User`/`Token` (auth, global), `Membership` (multi-org, per-org `Role`), `Invitation` (invite-only onboarding). All access-layer resources are **global**, not tenant-scoped.
+- `Nspark.Accounts` — `Organization`, `User`/`Token`, `Membership` (per-org
+  `Role`), `Invitation` (invite-only). Auth resources are global.
 - `Nspark.Projects` — `Project`.
-- `Nspark.Architecture` — `Graph`, `Node`, `Edge`, `GraphVersion` + `NodeType`/`EdgeType` enums.
-- `Nspark.Registry` — `Skill`, `Policy`, `Schema`, `MemoryTemplate`, `Package`, `PackageItem` (polymorphic bundling) + `AssetStatus`.
+- `Nspark.Architecture` — `Graph`, `Node`, `Edge`, `GraphVersion` + type enums.
+- `Nspark.Registry` — `Skill`, `Policy`, `Schema`, `MemoryTemplate`, `Package`,
+  `PackageItem` + `AssetStatus`.
+- `Nspark.Deployments` — `Deployment` (pinned `GraphVersion` → environment).
 
-**User-facing studio (`/studio`, `NsparkWeb.StudioLive`):**
+**Studio (`/studio`):** editable Svelte Flow canvas, CodeMirror content editor,
+live compiler panel (MDEx render), diagnostics panel, registry browser, AI
+Architect (Oban + Claude), org switching, members/invitations management.
 
-- Three-column blueprint shell (rail / Svelte Flow canvas / split inspector+compiler).
-- Editable canvas: drag-to-persist positions, connect (create edge), add node from rail, delete (key + button, cascades edges), inspector label edit + mute + delete.
-- CodeMirror 6 content editor with `{variable}` highlight + autocomplete; rail variable explorer (auto-discovered).
-- Live compiler panel: `Nspark.Compiler` assembles non-muted nodes in compile order → rendered server-side with MDEx; updates after every mutation.
+**Runtime API:** `POST /api/v1/graphs/:id/compile`,
+`POST /api/v1/deployments/:id/run` (bearer token, tenant from membership).
 
-**Tests:** `test/nspark/compiler_test.exs`, `test/nspark_web/live/studio_live_test.exs` (12 total, green).
+**Tests:** `compiler_test.exs`, `studio_live_test.exs` only. The
+orchestrator, diagnostics, RBAC, and API have no tests (see REVIEW_COMMENTS.md).
 
-**Decisions of record:** editor = CodeMirror (edit) + MDEx (render), no TipTap; graph persistence = JSON-while-editing → normalized rows on save → JSON snapshot on publish; multi-org via `Membership`, invite-only; namespacing avoids `Skill`/`Schema`/`Tool` collisions. See `docs/HLD.md`.
-
----
-
-## Priority 1 — close the foundational gaps
-
-### 1.1 Active-organization session + tenant resolution
-The studio currently falls back to the first/`nspark-demo` org (dev only) with `:live_user_optional`.
-
-- [x] `/switch-org/:org_id` controller + `:live_user_and_tenant_required` on_mount hook
-- [x] After login, read the user's `Membership`s; let them pick/switch an active org (header switcher).
-- [x] Set the active org as the Ash tenant in the LiveView mount and any controllers (`Ash.PlugHelpers.set_tenant` / on_mount assigning tenant).
-- [x] Gate the studio with `:live_user_required` (using `:live_user_and_tenant_required`).
-- [x] Replace `demo_org/0` and the first-org fallback in `StudioLive`.
-- [x] Redirect to `/studio` after successful login.
-
-### 1.2 Authorization (RBAC)
-Product resources currently have **no authorizer** (open in dev).
-
-- [x] Add `Ash.Policy.Authorizer` + policies to `Project`/`Graph`/`Node`/`Edge`/registry resources.
-- [x] Map the per-org `Role` (owner/admin/editor/viewer) to read/write/manage permissions.
-- [x] Generate policy charts (`mix ash.generate_policy_charts`) to review.
-
-### 1.3 Invitation delivery + accept UI
-The `invite`/`accept` actions exist but there is no email or web flow.
-
-- [x] Add an `Invitation` sender (`SendInvitationEmail`) to email the accept link.
-- [x] Build accept route/controller (`GET /invitations/:token` → `accept_invitation`).
-- [x] Org members + invitations management screen (`/org/members`, linked from studio header).
+**Decisions of record:** CodeMirror (edit) + MDEx (render); graph persistence =
+JSON-while-editing → normalized rows on save → JSON snapshot on publish;
+multi-org via `Membership`, invite-only. See `docs/HLD.md`.
 
 ---
 
-## Priority 2 — complete the core domain
+## ⏸ Parked — Multi-agent orchestration (was Priority 5)
 
-### 2.1 Deployments domain
-Last core domain from the HLD (not yet scaffolded).
+**Decision: freeze.** Phases 1–2 shipped (agent nodes, conditional routing,
+wave dispatch, `Orchestrator`). It is the largest, least-tested part of the
+codebase and it is **not what the enterprise buyer is paying for**. We are not
+investing further until the core registry story (P0–P2 below) is airtight.
 
-- [x] `Nspark.Deployments.Deployment` — `environment` (dev/staging/prod), `status`, `endpoint_slug`, `deployed_version`; belongs_to project + graph version.
-- [x] Publish flow: snapshot the graph into `GraphVersion.graph_snapshot` (canonical JSON), then deploy a pinned version.
-- [x] Runtime API endpoints: `POST /api/v1/graphs/:id/compile` and `POST /api/v1/deployments/:id/run` (variable injection) — see HLD §8.
+Before parking, close the one correctness landmine so it can't ship a wrong
+result silently:
 
-### 2.2 Graph persistence: save/publish/versions
-Implement the three-tier model end to end (HLD §4).
+- [ ] Nested agents fail silently today — `Orchestrator.dispatch_one/3` compiles
+  a sub-agent snapshot but doesn't re-orchestrate it, leaking raw `[AGENT: …]`
+  text into the parent output. Detect agent nodes in a sub-agent snapshot and
+  return an explicit error instead. (Full Phase 3 stays parked.)
 
-- [x] Graph-level dirty state: `graph_dirty` assign, set true on any mutation, false after publish.
-- [x] Publish → creates immutable `GraphVersion` snapshot (nodes + edges → canonical JSON), bumps `graph.graph_version`.
-- [x] Version history UI in inspector: list of versions with date + "Restore" button (restore deletes+recreates canvas from snapshot).
-
----
-
-## Priority 3 — studio depth
-
-### 3.1 Compiler hardening
-- [x] Copy-to-clipboard + raw/rendered toggle on the Live Compiler panel.
-- [x] Real tokenizer per provider (replace the `chars/4` heuristic); cost estimate.
-- [x] Topological ordering **within** a section using edges (not just inserted_at).
-- [x] Model-specific transforms (OpenAI / Anthropic / Gemini) behind a provider abstraction.
-
-### 3.2 Diagnostics panel (UX §9)
-- [x] DAG validation: cycle detection, floating nodes, missing connections.
-- [x] Variable diagnostics: undefined vs unused variables.
-- [x] Output diagnostics: missing/invalid schema; conflicting/duplicate instructions.
-- [x] Surface as a persistent panel with ✓ / ⚠ / ✕ states; mark node states on the canvas.
-
-### 3.3 Variable explorer interactions (UX §4.2)
-- [x] Click a variable → highlight consuming + producing nodes, show dependency path.
-
-### 3.4 Registry in the studio
-- [x] Drag a registry `Skill`/`Policy`/etc. onto the canvas → create a **linked** node (`Node.source_asset_id` set).
-- [x] "Convert to Skill" / clone (detach) actions from the inspector.
-- [x] Knowledge Registry browser in the rail (skills/policies/schemas/memory templates), search.
-
-### 3.5 Canvas polish
-- [x] Conditional-group wrapper rendering (the dashed `IF {mode} == …` frame from the reference).
-- [x] Node type → richer card treatments; muted styling parity with the reference.
-- [x] Minimap/controls theming; fit-to-selection; keyboard shortcuts.
+Phase 3 items (hierarchical orchestration, depth limits, execution trace,
+cross-graph inspector) remain in the backlog but **below** everything in P0–P3.
 
 ---
 
-## Priority 4 — platform / AI
+## P0 — Runtime delivery (the product is in the customer's critical path)
 
-- [x] **AI Architect** (HLD §7): NL copilot that edits graph structure; Prompt-to-Graph import (`Nspark.Architect` via `req` + `claude-opus-4-8` tool-use).
-- [x] **Oban jobs** for compilation, deployment pipelines, version snapshots, AI jobs — `Nspark.Workers.ArchitectWorker` on `ai` queue; PubSub result delivery to LiveView.
-- [x] **Packages** UX: bundle/install reusable architecture bundles across projects — packages browser in rail, click-to-install creates linked nodes.
-- [x] Audit trail (`ash_paper_trail`) across graph/skill/deployment changes.
+If our service is slow or down, the customer's app breaks. Enterprise will not
+accept that. `/compile` returning a string is the seed; it needs a real delivery
+contract around it.
+
+- [ ] **Pinned-version retrieval endpoint** — `GET /api/v1/prompts/:slug?version=N`
+  (and `@latest` / environment alias e.g. `@production`). Returns the resolved
+  prompt + its input schema + version metadata + an ETag. This, not `/run`, is
+  the primary product surface.
+- [ ] **Scoped API keys** per project/environment (not just a user bearer token);
+  key issuance + revocation UI; audit of API access.
+- [ ] **Caching + delivery** — strong ETag / `Cache-Control`, immutable pinned
+  versions are infinitely cacheable; document a CDN-frontable contract.
+- [ ] **Client SDK** (start with one language) — fetches by pinned version,
+  caches locally, **falls back to last-known-good on our outage**, validates
+  injected variables against the published schema before substituting.
+- [ ] **Rate limiting** on `/api/v1/*` (per key / per org).
+- [ ] Define and publish a retrieval **SLA / latency budget**; add a health/
+  readiness endpoint.
 
 ---
 
+## P1 — The variable / version contract (biggest correctness risk)
+
+A prompt edit that renames or drops a variable must not silently break a
+deployed app. The graph already knows its variables — publish that as a contract.
+
+- [ ] **Published input schema per `GraphVersion`** — on publish, derive the set
+  of required `{variables}` (names, and where typed, the expected shape) and
+  store it on the snapshot. Expose it via the retrieval endpoint.
+- [ ] **Client-side validation** — SDK rejects/raises when the app fails to
+  supply a required variable, before the prompt is used.
+- [ ] **Breaking-change detection on publish** — diff the new version's required
+  variables against the currently-deployed version; warn/block if a variable
+  consumed by a live deployment is removed or renamed.
+- [ ] **Compatibility surfacing in studio** — show "this change breaks deployment
+  X (prod)" before the author publishes.
+- [ ] Extend the existing variable diagnostics (undefined/unused) to feed this
+  contract rather than being studio-only.
+
 ---
 
-## Priority 5 — Multi-agent composition (see `MULTI_AGENT.md`)
+## P2 — Evaluation: "is this prompt good?"
 
-### Phase 1 — Foundation ✓ (complete)
+Today "good" means static lint (parses, vars defined). Enterprise prompt
+management means *behavioral* good. This is currently the weakest area and the
+most differentiating to fix.
 
-- [x] `:agent` added to `NodeType` enum (stored as `:text` in Postgres — no migration needed)
-- [x] `AgentNode.svelte` — blue/indigo canvas component; shows agent name, version badge, input count, output var, on_error indicator
-- [x] `ConditionalNode.svelte` — diamond SVG, `yes`/`no` handles, amber theme
-- [x] Studio: Agent palette entry + drag-to-place; `update_agent_metadata` handler; inspector panel (sub-agent graph selector, output var, on-error toggle)
-- [x] Edge metadata field (`edge.metadata :map`) — stores `branch`/`label` for conditional routing
-- [x] Compiler: agent nodes compile to `[AGENT: output_var]...[\AGENT]` orchestration directives in an ORCHESTRATION section
-- [x] Diagnostics: agent `output_var` treated as a produced variable; warns on missing `source_graph_id` or empty `output_var`
-- [x] `Nspark.Orchestrator` — parse directives, sequential sub-agent dispatch, `on_error: continue/fail` policy, variable rendering
-- [x] Deploy run endpoint wired through Orchestrator; returns `prompt` + `sub_agent_calls` metadata
-- [x] `serialize_snapshot` includes node `metadata` (minus position) so agent directives reconstruct from published snapshots
+- [ ] **Test cases attached to a graph** — `(input variables → expected /
+  asserted output)` examples stored per graph.
+- [ ] **Run-on-edit / pre-publish eval** — execute the prompt against test cases
+  (via a model call) and score; block or warn on regression.
+- [ ] **Scoring** — start with deterministic asserts (contains / regex / JSON
+  schema match), then add LLM-as-judge scoring.
+- [ ] **A/B + version comparison** — run two versions against the same suite and
+  diff results.
+- [ ] **Eval results in version history** — a version carries its eval score so
+  reviewers see quality before promoting.
 
-### Phase 2 — Parallel + Conditional (in progress)
+---
 
-- [x] Parallel dispatch in Orchestrator — dependency-wave grouping; each wave dispatched via `Task.async` + `Task.await` with per-directive timeout
-- [x] Timeout per Agent node (`metadata.timeout_ms`); inspector field; orchestrator enforces per-call timeout
-- [x] Orchestration metadata surfaced in the deploy run response (`sub_agent_calls` with per-call duration + status)
-- [x] Conditional node routing: diamond → Agent node branches based on runtime variable value
-- [x] Studio: visualize parallel fan-out (multiple Agent nodes at same depth get a "parallel" indicator)
+## P3 — Governance & promotion workflow
 
-### Phase 3 — Depth + Observability
+RBAC + audit trail (`ash_paper_trail`) already exist. The missing piece is a
+human approval gate — the "external way of checking prompts" implies sign-off.
 
-- [ ] Hierarchical orchestration (depth > 1 — sub-agents that are themselves orchestrators)
-- [ ] Depth limit enforcement at compile time (configurable max, default 3)
-- [ ] Execution trace: per-call logs surfaced in a future AgentOps panel
-- [ ] Sub-agent output type checking against the referenced graph's Output node schema
-- [ ] Cross-graph variable inspector in studio
+- [ ] **Environment promotion** — explicit dev → staging → production flow;
+  publishing ≠ going to prod.
+- [ ] **Publish-to-prod approval** — who can promote to production (gate on role,
+  e.g. admin+); require review/approval before a prod deployment activates.
+- [ ] **Change review / diff** — show a structural + text diff of what changed
+  between versions at the approval step.
+- [ ] Distinguish *execute* from *read* on the runtime API — a `viewer` token can
+  currently run any deployment in its org (see REVIEW_COMMENTS.md).
+
+---
+
+## P4 — Hardening (cross-cutting, do alongside P0–P3)
+
+- [ ] **Test backfill** — Orchestrator, Diagnostics, RBAC policies, runtime API
+  controllers (see REVIEW_COMMENTS.md for the specific cases).
+- [ ] **Structured orchestration/compile artifact** — stop re-parsing the
+  `[AGENT: …]` text with a regex; carry directives as structured data. (Relevant
+  even with orchestration parked, because the compile→text→regex round trip is
+  fragile for *any* downstream consumer.)
+- [ ] Replace the char-count token heuristic with real per-provider tokenization,
+  or correct the NEXT_STEPS/PRD claim that says it's done.
+- [ ] Move hardcoded provider model names + pricing (`compiler.ex`) to config.
+- [ ] Promote `GraphVersion.author_id` (loose uuid) to a managed `belongs_to`.
+- [ ] Decompose the 1709-line `StudioLive` into components/handler modules.
+
+---
+
+## Completed foundations (record)
+
+These shipped and underpin the work above. Kept for history.
+
+- Active-org session + tenant resolution; `:live_user_and_tenant_required`.
+- RBAC: `Ash.Policy.Authorizer` + `HasRole` check across product resources.
+- Invitation delivery + accept flow; members management screen.
+- Deployments domain; publish → `GraphVersion` snapshot; compile/run API.
+- Three-tier graph persistence (draft rows → version snapshot → pinned deploy).
+- Compiler: topo ordering within sections, provider transforms, cost estimate.
+- Diagnostics panel: DAG validation, variable + output diagnostics.
+- Variable explorer interactions; registry-in-studio (linked nodes, packages).
+- AI Architect (NL → graph) via Oban + Claude `claude-opus-4-8`.
+- Audit trail (`ash_paper_trail`) on graph/skill/deployment changes.
+- Multi-agent Phases 1–2 (now parked — see above).
 
 ---
 
 ## Known cleanups / notes
 
-- `mdex` was added; a brand-new dep + NIF requires a **dev-server restart** (cannot hot-load).
-- Dev sanity-check rows exist in the dev DB from earlier verification; `mix ash.reset` to clean.
-- Demo data: `mix run priv/repo/demo_seed.exs` (idempotent) creates the `nspark-demo` org + "Agent Planner" graph.
-- `CodeEditor.svelte` keeps the autofixer's advisory `bind:this`/`$effect` notes — intentional (CodeMirror mount + Svelte Flow writable-state bridge can't use `$derived`).
-- `handle_event/3` grouping warning in `studio_live.ex` — pre-existing, clauses are logically grouped by concern not alphabetically; suppressing is low priority.
+- `mdex` is a NIF dep — a brand-new dep requires a **dev-server restart**.
+- Demo data: `mix run priv/repo/demo_seed.exs` (idempotent).
+- `mix ash.reset` to clear dev sanity-check rows.
+- `handle_event/3` grouping warning in `studio_live.ex` — pre-existing; resolves
+  naturally when StudioLive is decomposed (P4).
