@@ -3,7 +3,7 @@
 Source: `LIVE_PROMPT.md` brainstorm (the "prompt tree + diffing" idea, salvaged
 into the pull-based product) + product-positioning **P1 — variable/version
 contract**.
-Status: **Phases 1–2 complete** — contract extraction + diff engine shipped; Phases 3–5 pending.
+Status: **Phases 1–3 complete** — contract, diff engine, and publish-time gate shipped; Phases 4–5 pending.
 Owner: —
 Last updated: 2026-06-16
 
@@ -157,19 +157,25 @@ Make a version's input/output surface a first-class, comparable value.
 
 Wire the engine into `Architecture.publish_graph/5`.
 
-- [ ] After `serialize_snapshot`, load the latest existing `GraphVersion` for the
-      graph; compute `contract(new)` and `diff(old.graph_snapshot, new)`.
-- [ ] Persist `input_contract` and `diff_summary` (`:map`) on the new version.
-      Migration via `mix ash.codegen`.
-- [ ] If `level == :breaking`: block publish unless the caller passes an explicit
-      acknowledgement, **and require a `changelog`** naming the break — reuse the
-      `data-confirm` blast-radius pattern from the Skill modal. The confirm text
-      lists the offending fields from `diff.reasons`.
-- [ ] First publish (no prior version) → `diff_summary` is `nil`/`:initial`; no
-      gate.
-- [ ] Tests: breaking publish blocked without ack; allowed with ack + changelog;
-      compatible publish passes clean; first publish ungated.
-      (`test/nspark/architecture/version_diff_publish_test.exs`.)
+- [x] `publish_graph/6` (new optional `opts` arg) computes
+      `diff_against_previous/3` — `versions_for_graph!` → latest →
+      `VersionDiff.diff(latest.graph_snapshot, new)`.
+- [x] `input_contract` (Phase 1) and `diff_summary` (`:map`, non-null, `public?`)
+      persisted on the new version. Migration
+      `20260616194630_add_graph_version_diff_summary` via `mix ash.codegen`.
+- [x] Breaking diff gated in the domain: `gate_breaking/2` returns
+      `{:error, {:breaking_change, diff}}` without `acknowledge_breaking: true`,
+      and `{:error, {:changelog_required, diff}}` if acknowledged with a blank
+      `:changelog`. On block, no version is created and `graph_version` is not
+      bumped (gate runs before the transaction). The studio publish handler shows
+      a clear flash listing the first reasons; the **`data-confirm` ack +
+      changelog input UI is Phase 4**.
+- [x] First publish (no prior version) → `diff_summary = %{"level" => "initial"}`
+      (a string, so it never matches the atom `:breaking` gate); ungated.
+- [x] Tests: `test/nspark/architecture/version_diff_publish_test.exs` — first
+      publish initial/ungated, compatible clean, breaking blocked w/o ack (no
+      version created), ack-without-changelog rejected, ack+changelog publishes
+      (changelog trimmed, `diff_summary` frozen). Full suite green (62 tests).
 
 ## Phase 4 — Studio diff / version-history view
 

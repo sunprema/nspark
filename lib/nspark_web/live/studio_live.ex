@@ -662,6 +662,16 @@ defmodule NsparkWeb.StudioLive do
            "Can't publish: #{length(problems)} linked Skill#{if length(problems) > 1, do: "s"} could not be resolved. Fix the highlighted nodes first."
          )}
 
+      {:error, {:breaking_change, diff}} ->
+        reasons = diff["reasons"] |> Enum.take(3) |> Enum.join("; ")
+
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Breaking change vs the last version (#{reasons}). It was not published."
+         )}
+
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Publish failed: #{inspect(reason)}")}
     end

@@ -39,13 +39,24 @@ defmodule Nspark.Architecture do
   later edited. The resolved Skill versions are recorded on the version's
   `resolved_skills` manifest (Knowledge Layer, plan Phase 4).
 
-  Returns `{:ok, version}`, or `{:error, {:unresolved_skills, problems}}` when a
-  linked Skill is missing or deprecated — a graph with broken references must not
-  be publishable.
+  The new version is diffed against the immediately preceding one
+  (`Nspark.VersionDiff.diff/2`) and the classified result is frozen on the
+  version's `diff_summary`. A **breaking** change (a new required variable, a
+  variable rename, or a dropped output) is gated: the caller must pass
+  `acknowledge_breaking: true` **and** a non-blank `:changelog` naming the break.
+
+  Options (`opts`):
+  - `:acknowledge_breaking` — `true` to proceed past a breaking diff
+  - `:changelog` — required when acknowledging a breaking change
+
+  Returns `{:ok, version}`, or:
+  - `{:error, {:unresolved_skills, problems}}` — a linked Skill is missing/deprecated
+  - `{:error, {:breaking_change, diff}}` — breaking diff, not acknowledged
+  - `{:error, {:changelog_required, diff}}` — acknowledged but no changelog
   """
-  def publish_graph(graph, nodes, edges, actor, tenant) do
-    opts = [tenant: tenant, actor: actor]
-    resolution = Nspark.Registry.resolve_skills(nodes, opts)
+  def publish_graph(graph, nodes, edges, actor, tenant, opts \\ []) do
+    ash_opts = [tenant: tenant, actor: actor]
+    resolution = Nspark.Registry.resolve_skills(nodes, ash_opts)
 
     if resolution.problems != [] do
       {:error, {:unresolved_skills, resolution.problems}}
@@ -53,27 +64,65 @@ defmodule Nspark.Architecture do
       snapshot = serialize_snapshot(resolution.nodes, edges)
       contract = Nspark.VersionDiff.contract(snapshot)
       version_number = graph.graph_version
+      diff_summary = diff_against_previous(graph, snapshot, ash_opts)
 
-      Nspark.Repo.transaction(fn ->
-        version =
-          Ash.create!(
-            GraphVersion,
-            %{
-              graph_id: graph.id,
-              version_number: version_number,
-              graph_snapshot: snapshot,
-              resolved_skills: resolution.manifest,
-              input_contract: contract,
-              author_id: actor.id
-            },
-            opts
-          )
+      with :ok <- gate_breaking(diff_summary, opts) do
+        result =
+          Nspark.Repo.transaction(fn ->
+            version =
+              Ash.create!(
+                GraphVersion,
+                %{
+                  graph_id: graph.id,
+                  version_number: version_number,
+                  graph_snapshot: snapshot,
+                  resolved_skills: resolution.manifest,
+                  input_contract: contract,
+                  diff_summary: diff_summary,
+                  changelog: normalize_changelog(opts[:changelog]),
+                  author_id: actor.id
+                },
+                ash_opts
+              )
 
-        Ash.update!(graph, %{graph_version: version_number + 1}, opts)
-        version
-      end)
+            Ash.update!(graph, %{graph_version: version_number + 1}, ash_opts)
+            version
+          end)
+
+        result
+      end
     end
   end
+
+  # Diff the new snapshot against the immediately preceding published version.
+  # First publish (no prior version) is `%{"level" => "initial"}` and never gated.
+  defp diff_against_previous(graph, snapshot, ash_opts) do
+    case versions_for_graph!(graph.id, ash_opts) do
+      [latest | _] -> Nspark.VersionDiff.diff(latest.graph_snapshot, snapshot)
+      [] -> %{"level" => "initial"}
+    end
+  end
+
+  # A breaking diff requires both an explicit acknowledgement and a changelog.
+  # `diff/2` levels are atoms; `"initial"` (a string) never matches, so first
+  # publishes pass straight through.
+  defp gate_breaking(%{"level" => :breaking} = diff, opts) do
+    cond do
+      not Keyword.get(opts, :acknowledge_breaking, false) -> {:error, {:breaking_change, diff}}
+      blank?(opts[:changelog]) -> {:error, {:changelog_required, diff}}
+      true -> :ok
+    end
+  end
+
+  defp gate_breaking(_diff, _opts), do: :ok
+
+  defp normalize_changelog(changelog) do
+    if blank?(changelog), do: nil, else: String.trim(changelog)
+  end
+
+  defp blank?(nil), do: true
+  defp blank?(s) when is_binary(s), do: String.trim(s) == ""
+  defp blank?(_), do: false
 
   @doc """
   Restore a graph to a published snapshot. Deletes the current nodes/edges and
