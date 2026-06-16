@@ -1,6 +1,7 @@
 /* See the Tailwind configuration guide for advanced usage
    https://tailwindcss.com/docs/configuration */
 
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
 @import "tailwindcss" source(none);
 @source "../../deps/ash_authentication_phoenix";
 @import "phoenix-colocated/nspark/colocated.css";
@@ -15,86 +16,6 @@
    The heroicons installation itself is managed by your mix.exs */
 @plugin "../vendor/heroicons";
 
-/* daisyUI Tailwind Plugin. You can update this file by fetching the latest version with:
-   curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui.js
-   Make sure to look at the daisyUI changelog: https://daisyui.com/docs/changelog/ */
-@plugin "daisyui" {
-  themes: false;
-}
-
-/* daisyUI theme plugin. You can update this file by fetching the latest version with:
-  curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui-theme.js
-  We ship with two themes, a light one inspired on Phoenix colors and a dark one inspired
-  on Elixir colors. Build your own at: https://daisyui.com/theme-generator/ */
-@plugin "daisyui/theme" {
-  name: "dark";
-  default: false;
-  prefersdark: true;
-  color-scheme: "dark";
-  --color-base-100: oklch(30.33% 0.016 252.42);
-  --color-base-200: oklch(25.26% 0.014 253.1);
-  --color-base-300: oklch(20.15% 0.012 254.09);
-  --color-base-content: oklch(97.807% 0.029 256.847);
-  --color-primary: oklch(58% 0.233 277.117);
-  --color-primary-content: oklch(96% 0.018 272.314);
-  --color-secondary: oklch(58% 0.233 277.117);
-  --color-secondary-content: oklch(96% 0.018 272.314);
-  --color-accent: oklch(60% 0.25 292.717);
-  --color-accent-content: oklch(96% 0.016 293.756);
-  --color-neutral: oklch(37% 0.044 257.287);
-  --color-neutral-content: oklch(98% 0.003 247.858);
-  --color-info: oklch(58% 0.158 241.966);
-  --color-info-content: oklch(97% 0.013 236.62);
-  --color-success: oklch(60% 0.118 184.704);
-  --color-success-content: oklch(98% 0.014 180.72);
-  --color-warning: oklch(66% 0.179 58.318);
-  --color-warning-content: oklch(98% 0.022 95.277);
-  --color-error: oklch(58% 0.253 17.585);
-  --color-error-content: oklch(96% 0.015 12.422);
-  --radius-selector: 0.25rem;
-  --radius-field: 0.25rem;
-  --radius-box: 0.5rem;
-  --size-selector: 0.21875rem;
-  --size-field: 0.21875rem;
-  --border: 1.5px;
-  --depth: 1;
-  --noise: 0;
-}
-
-@plugin "daisyui/theme" {
-  name: "light";
-  default: true;
-  prefersdark: false;
-  color-scheme: "light";
-  --color-base-100: oklch(98% 0 0);
-  --color-base-200: oklch(96% 0.001 286.375);
-  --color-base-300: oklch(92% 0.004 286.32);
-  --color-base-content: oklch(21% 0.006 285.885);
-  --color-primary: oklch(70% 0.213 47.604);
-  --color-primary-content: oklch(98% 0.016 73.684);
-  --color-secondary: oklch(55% 0.027 264.364);
-  --color-secondary-content: oklch(98% 0.002 247.839);
-  --color-accent: oklch(0% 0 0);
-  --color-accent-content: oklch(100% 0 0);
-  --color-neutral: oklch(44% 0.017 285.786);
-  --color-neutral-content: oklch(98% 0 0);
-  --color-info: oklch(62% 0.214 259.815);
-  --color-info-content: oklch(97% 0.014 254.604);
-  --color-success: oklch(70% 0.14 182.503);
-  --color-success-content: oklch(98% 0.014 180.72);
-  --color-warning: oklch(66% 0.179 58.318);
-  --color-warning-content: oklch(98% 0.022 95.277);
-  --color-error: oklch(58% 0.253 17.585);
-  --color-error-content: oklch(96% 0.015 12.422);
-  --radius-selector: 0.25rem;
-  --radius-field: 0.25rem;
-  --radius-box: 0.5rem;
-  --size-selector: 0.21875rem;
-  --size-field: 0.21875rem;
-  --border: 1.5px;
-  --depth: 1;
-  --noise: 0;
-}
 
 /* Add variants based on LiveView classes */
 @custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
@@ -108,3 +29,470 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 /* This file is for your main application CSS */
+
+/* ───────────────────────── Architecture Studio ─────────────────────────
+   Technical-blueprint shell: graph-paper, ink colors, IBM Plex. See UX §2. */
+.studio {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: oklch(0.985 0.004 245);
+  color: oklch(0.28 0.02 255);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+
+.studio-bar {
+  height: 46px;
+  flex: 0 0 46px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  background: oklch(0.97 0.004 245);
+  border-bottom: 1px solid oklch(0.82 0.02 250);
+}
+.studio-mark {
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid oklch(0.3 0.02 255);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.studio-mark span {
+  width: 7px;
+  height: 7px;
+  background: oklch(0.55 0.13 255);
+  transform: rotate(45deg);
+}
+.studio-title {
+  font: 600 13px/1 "IBM Plex Mono", monospace;
+}
+.studio-graph {
+  font: 400 12.5px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.6 0.015 250);
+}
+.studio-chip {
+  font: 500 10px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.5 0.11 155);
+  border: 1px solid oklch(0.72 0.08 155);
+  padding: 3px 6px;
+  letter-spacing: 0.05em;
+}
+.studio-spacer {
+  flex: 1;
+}
+.studio-btn {
+  font: 500 11.5px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.38 0.02 255);
+  border: 1px solid oklch(0.78 0.02 250);
+  padding: 7px 11px;
+  background: oklch(0.99 0.003 245);
+  cursor: pointer;
+  user-select: none;
+}
+.studio-btn--accent {
+  color: oklch(0.5 0.13 255);
+  border-color: oklch(0.72 0.1 255);
+  background: oklch(0.96 0.03 255);
+}
+.studio-btn--solid {
+  color: oklch(0.99 0.003 245);
+  border-color: oklch(0.3 0.02 255);
+  background: oklch(0.3 0.02 255);
+}
+
+.studio-cols {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* left rail */
+.studio-rail {
+  width: 150px;
+  flex: 0 0 150px;
+  border-right: 1px solid oklch(0.82 0.02 250);
+  background: oklch(0.97 0.004 245);
+  padding: 11px 10px;
+  overflow-y: auto;
+}
+.rail-head {
+  font: 600 8px/1.3 "IBM Plex Mono", monospace;
+  letter-spacing: 0.1em;
+  color: oklch(0.55 0.02 250);
+  margin-bottom: 10px;
+}
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border: 1px solid oklch(0.86 0.02 250);
+  background: oklch(0.99 0.003 245);
+  margin-bottom: 6px;
+  cursor: grab;
+  transition: border-color 0.12s ease, transform 0.08s ease;
+}
+.rail-item:hover {
+  border-color: oklch(0.7 0.04 255);
+  transform: translateX(1px);
+}
+.rail-swatch {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+.rail-name {
+  font: 500 11px/1 "IBM Plex Sans", sans-serif;
+  color: oklch(0.36 0.02 255);
+}
+.rail-item {
+  width: 100%;
+  text-align: left;
+}
+.rail-hint {
+  margin-top: 14px;
+  font: 400 9.5px/1.5 "IBM Plex Mono", monospace;
+  color: oklch(0.6 0.015 250);
+}
+.rail-head--mt {
+  margin-top: 18px;
+}
+.rail-var {
+  font: 500 10.5px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.45 0.1 255);
+  border: 1px solid oklch(0.78 0.06 255);
+  background: oklch(0.97 0.02 255);
+  padding: 5px 7px;
+  margin-bottom: 5px;
+  word-break: break-all;
+}
+.insp-delete {
+  margin-top: 14px;
+  width: 100%;
+  font: 500 11px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.5 0.14 28);
+  border: 1px solid oklch(0.78 0.08 28);
+  background: oklch(0.98 0.01 28);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.insp-delete:hover {
+  background: oklch(0.95 0.03 28);
+}
+
+/* center canvas — the LiveSvelte hook div must fill the column */
+.studio-canvas {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+.studio-canvas > div,
+.studio-canvas > div > div {
+  width: 100%;
+  height: 100%;
+}
+.studio-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.studio-empty-title {
+  font: 600 14px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.4 0.02 255);
+}
+.studio-empty-body {
+  font-size: 12.5px;
+  color: oklch(0.55 0.02 250);
+}
+.studio-empty code {
+  font-family: "IBM Plex Mono", monospace;
+  background: oklch(0.94 0.01 250);
+  padding: 1px 5px;
+}
+
+/* right column — split inspector (top) + live compiler (bottom) */
+.studio-inspector {
+  width: 340px;
+  flex: 0 0 340px;
+  border-left: 1px solid oklch(0.82 0.02 250);
+  background: oklch(0.975 0.004 245);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.insp-panel {
+  flex: 1 1 48%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid oklch(0.7 0.02 250);
+  overflow: hidden;
+}
+.compiler-panel {
+  flex: 1 1 52%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.compiler-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  font: 600 11.5px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.3 0.02 255);
+  border-bottom: 1px solid oklch(0.88 0.015 250);
+  background: oklch(0.97 0.003 245);
+}
+.compiler-live {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font: 600 9px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.08em;
+  color: oklch(0.5 0.11 155);
+}
+.compiler-live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: oklch(0.6 0.13 155);
+}
+.compiler-stats {
+  flex: 0 0 auto;
+  padding: 9px 14px;
+  font: 400 10px/1.4 "IBM Plex Mono", monospace;
+  color: oklch(0.6 0.015 250);
+  border-bottom: 1px solid oklch(0.88 0.015 250);
+}
+.compiler-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  background: oklch(0.985 0.004 245);
+}
+.compiler-empty {
+  font: 400 11.5px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.62 0.015 250);
+}
+.compiler-md {
+  font: 400 11.5px/1.7 "IBM Plex Mono", monospace;
+  color: oklch(0.34 0.02 255);
+}
+.compiler-md h1 {
+  font: 600 10px/1.2 "IBM Plex Mono", monospace;
+  letter-spacing: 0.06em;
+  color: oklch(0.5 0.13 255);
+  margin: 14px 0 6px;
+}
+.compiler-md h1:first-child {
+  margin-top: 0;
+}
+.compiler-md p {
+  margin: 0 0 8px;
+}
+.compiler-md ul,
+.compiler-md ol {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+.compiler-md li {
+  margin: 2px 0;
+}
+.compiler-md code {
+  background: oklch(0.94 0.01 250);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+.compiler-md pre {
+  background: oklch(0.96 0.005 250);
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+.insp-head {
+  flex: 0 0 auto;
+  padding: 12px 14px;
+  font: 600 11.5px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.3 0.02 255);
+  border-bottom: 1px solid oklch(0.88 0.015 250);
+  background: oklch(0.97 0.003 245);
+}
+.insp-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.insp-field-label {
+  font: 600 9px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.16em;
+  color: oklch(0.55 0.02 250);
+  margin-top: 8px;
+}
+.insp-type {
+  font: 600 11px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.4 0.02 255);
+}
+.insp-field {
+  border: 1px solid oklch(0.82 0.02 250);
+  background: oklch(0.99 0.003 245);
+  padding: 8px 10px;
+  font: 500 12.5px/1.3 "IBM Plex Sans", sans-serif;
+  color: oklch(0.3 0.02 255);
+}
+.insp-content {
+  border: 1px solid oklch(0.82 0.02 250);
+  background: oklch(0.99 0.004 245);
+  padding: 10px 11px;
+  font: 400 12px/1.6 "IBM Plex Mono", monospace;
+  color: oklch(0.34 0.02 255);
+  white-space: pre-wrap;
+}
+.insp-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid oklch(0.88 0.015 250);
+  margin-top: 12px;
+  padding-top: 11px;
+  font: 500 11px/1 "IBM Plex Sans", sans-serif;
+  color: oklch(0.4 0.02 255);
+}
+.insp-pill {
+  font: 600 8.5px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.1em;
+  color: oklch(0.46 0.12 155);
+  border: 1px solid oklch(0.72 0.08 155);
+  background: oklch(0.96 0.03 155);
+  padding: 3px 6px;
+}
+.insp-pill--off {
+  color: oklch(0.55 0.02 250);
+  border-color: oklch(0.8 0.02 250);
+  background: oklch(0.96 0.004 250);
+}
+.insp-empty {
+  flex: 1;
+  padding: 20px 15px;
+  font-size: 12px;
+  color: oklch(0.6 0.02 250);
+}
+.insp-foot {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border-top: 1px solid oklch(0.88 0.015 250);
+  font: 500 10px/1 "IBM Plex Mono", monospace;
+  color: oklch(0.55 0.02 250);
+  background: oklch(0.97 0.003 245);
+}
+
+/* New Agent button in the studio bar */
+.studio-btn--new {
+  color: oklch(0.42 0.1 155);
+  border-color: oklch(0.7 0.08 155);
+  background: oklch(0.96 0.025 155);
+}
+.studio-btn--new:hover {
+  background: oklch(0.93 0.04 155);
+}
+
+/* New-graph dialog */
+.dlg-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.dlg-backdrop {
+  position: absolute;
+  inset: 0;
+  background: oklch(0.2 0.01 255 / 0.55);
+}
+.dlg-box {
+  position: relative;
+  background: oklch(0.985 0.004 245);
+  border: 1px solid oklch(0.78 0.04 255);
+  width: 420px;
+  padding: 24px 26px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 8px 32px oklch(0.2 0.02 255 / 0.18);
+}
+.dlg-head {
+  font: 700 10px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.14em;
+  color: oklch(0.38 0.08 255);
+  margin-bottom: 14px;
+}
+.dlg-field-label {
+  font: 600 9px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.16em;
+  color: oklch(0.55 0.02 250);
+  margin-top: 10px;
+  margin-bottom: 5px;
+}
+.dlg-optional {
+  font-weight: 400;
+  color: oklch(0.68 0.01 250);
+}
+.dlg-input {
+  width: 100%;
+  border: 1px solid oklch(0.82 0.02 250);
+  background: oklch(0.99 0.003 245);
+  padding: 9px 11px;
+  font: 500 13px/1.3 "IBM Plex Sans", sans-serif;
+  color: oklch(0.28 0.02 255);
+  outline: none;
+  box-sizing: border-box;
+}
+.dlg-input:focus {
+  border-color: oklch(0.6 0.1 255);
+}
+.dlg-textarea {
+  resize: vertical;
+  min-height: 72px;
+  font: 400 12.5px/1.5 "IBM Plex Sans", sans-serif;
+}
+.dlg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+.dlg-btn {
+  font: 600 11px/1 "IBM Plex Mono", monospace;
+  padding: 9px 16px;
+  border: 1px solid oklch(0.78 0.02 250);
+  cursor: pointer;
+}
+.dlg-btn--cancel {
+  color: oklch(0.5 0.02 255);
+  background: oklch(0.97 0.004 245);
+}
+.dlg-btn--cancel:hover {
+  background: oklch(0.94 0.01 250);
+}
+.dlg-btn--create {
+  color: oklch(0.99 0.003 245);
+  background: oklch(0.38 0.08 255);
+  border-color: oklch(0.38 0.08 255);
+}
+.dlg-btn--create:hover:not(:disabled) {
+  background: oklch(0.32 0.07 255);
+}
+.dlg-btn--create:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

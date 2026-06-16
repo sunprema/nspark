@@ -77,6 +77,7 @@ defmodule Nspark.MixProject do
   defp deps do
     [
       {:live_svelte, "~> 0.18"},
+      {:mdex, "~> 0.8"},
       {:bcrypt_elixir, "~> 3.0"},
       {:picosat_elixir, "~> 0.2"},
       {:sourceror, "~> 1.8", only: [:dev, :test]},

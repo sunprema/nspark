@@ -37,6 +37,9 @@ defmodule NsparkWeb.Router do
       #
       # If an authenticated user must *not* be present:
       # on_mount {NsparkWeb.LiveUserAuth, :live_no_user}
+
+      live "/studio", StudioLive
+      live "/studio/:graph_id", StudioLive
     end
   end
 
@@ -54,6 +57,7 @@ defmodule NsparkWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+    get "/switch-org/:org_id", OrgController, :switch
     auth_routes AuthController, Nspark.Accounts.User, path: "/auth"
     sign_out_route AuthController
 
@@ -64,25 +68,25 @@ defmodule NsparkWeb.Router do
                   on_mount: [{NsparkWeb.LiveUserAuth, :live_no_user}],
                   overrides: [
                     NsparkWeb.AuthOverrides,
-                    Elixir.AshAuthentication.Phoenix.Overrides.DaisyUI
+                    Elixir.AshAuthentication.Phoenix.Overrides.Default
                   ]
 
     # Remove this if you do not want to use the reset password feature
     reset_route auth_routes_prefix: "/auth",
                 overrides: [
                   NsparkWeb.AuthOverrides,
-                  Elixir.AshAuthentication.Phoenix.Overrides.DaisyUI
+                  Elixir.AshAuthentication.Phoenix.Overrides.Default
                 ]
 
     # Remove this if you do not use the confirmation strategy
     confirm_route Nspark.Accounts.User, :confirm_new_user,
       auth_routes_prefix: "/auth",
-      overrides: [NsparkWeb.AuthOverrides, Elixir.AshAuthentication.Phoenix.Overrides.DaisyUI]
+      overrides: [NsparkWeb.AuthOverrides, Elixir.AshAuthentication.Phoenix.Overrides.Default]
 
     # Remove this if you do not use the magic link strategy.
     magic_sign_in_route(Nspark.Accounts.User, :magic_link,
       auth_routes_prefix: "/auth",
-      overrides: [NsparkWeb.AuthOverrides, Elixir.AshAuthentication.Phoenix.Overrides.DaisyUI]
+      overrides: [NsparkWeb.AuthOverrides, Elixir.AshAuthentication.Phoenix.Overrides.Default]
     )
   end
 

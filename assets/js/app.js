@@ -28,11 +28,35 @@ import topbar from "topbar"
 import {getHooks} from "live_svelte"
 import Components from "virtual:live-svelte-components"
 
+// Enables drag-from-rail-to-canvas on the node palette buttons.
+// Sets the MIME type used by GraphCanvas.svelte's drop handler.
+const DragRailNode = {
+  mounted() {
+    let dragged = false;
+
+    this.el.addEventListener("dragstart", (e) => {
+      dragged = true;
+      e.dataTransfer.setData("application/nspark-node-type", this.el.dataset.nodeType);
+      e.dataTransfer.effectAllowed = "copy";
+    });
+
+    this.el.addEventListener("dragend", () => {
+      // Reset after the click event that some browsers fire post-drag
+      setTimeout(() => { dragged = false; }, 50);
+    });
+
+    // Capture phase beats Phoenix's phx-click listener
+    this.el.addEventListener("click", (e) => {
+      if (dragged) e.stopImmediatePropagation();
+    }, true);
+  },
+};
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, ...getHooks(Components)},
+  hooks: {...colocatedHooks, ...getHooks(Components), DragRailNode},
 })
 
 // Show progress bar on live navigation and form submits

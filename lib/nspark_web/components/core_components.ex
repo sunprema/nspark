@@ -8,12 +8,8 @@ defmodule NsparkWeb.CoreComponents do
   with doc strings and declarative assigns. You may customize and style
   them in any way you want, based on your application growth and needs.
 
-  The foundation for styling is Tailwind CSS, a utility-first CSS framework,
-  augmented with daisyUI, a Tailwind CSS plugin that provides UI components
-  and themes. Here are useful references:
-
-    * [daisyUI](https://daisyui.com/docs/intro/) - a good place to get
-      started and see the available components.
+  The foundation for styling is Tailwind CSS, a utility-first CSS framework.
+  Here are useful references:
 
     * [Tailwind CSS](https://tailwindcss.com) - the foundational framework
       we build on. You will use it for layout, sizing, flexbox, grid, and
@@ -63,13 +59,13 @@ defmodule NsparkWeb.CoreComponents do
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
-      class="toast toast-top toast-end z-50"
+      class="fixed top-4 right-4 z-50"
       {@rest}
     >
       <div class={[
-        "alert w-80 sm:w-96 max-w-80 sm:max-w-96 text-wrap",
-        @kind == :info && "alert-info",
-        @kind == :error && "alert-error"
+        "flex items-start gap-3 rounded-lg px-4 py-3 shadow-lg w-80 sm:w-96 max-w-80 sm:max-w-96 text-wrap",
+        @kind == :info && "bg-blue-50 border border-blue-200 text-blue-900",
+        @kind == :error && "bg-red-50 border border-red-200 text-red-900"
       ]}>
         <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
         <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
@@ -101,11 +97,14 @@ defmodule NsparkWeb.CoreComponents do
   slot :inner_block, required: true
 
   def button(%{rest: rest} = assigns) do
-    variants = %{"primary" => "btn-primary", nil => "btn-primary btn-soft"}
+    variants = %{
+      "primary" => "bg-slate-800 text-white hover:bg-slate-700",
+      nil => "bg-slate-100 text-slate-800 hover:bg-slate-200 border border-slate-300"
+    }
 
     assigns =
       assign_new(assigns, :class, fn ->
-        ["btn", Map.fetch!(variants, assigns[:variant])]
+        ["inline-flex items-center justify-center px-4 py-2 rounded font-semibold text-sm cursor-pointer transition-colors", Map.fetch!(variants, assigns[:variant])]
       end)
 
     if rest[:href] || rest[:navigate] || rest[:patch] do
@@ -212,7 +211,7 @@ defmodule NsparkWeb.CoreComponents do
       end)
 
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="mb-2">
       <label for={@id}>
         <input
           type="hidden"
@@ -221,14 +220,14 @@ defmodule NsparkWeb.CoreComponents do
           disabled={@rest[:disabled]}
           form={@rest[:form]}
         />
-        <span class="label">
+        <span class="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
             id={@id}
             name={@name}
             value="true"
             checked={@checked}
-            class={@class || "checkbox checkbox-sm"}
+            class={@class || "h-4 w-4 rounded border-gray-300 text-blue-600 cursor-pointer"}
             {@rest}
           />{@label}
         </span>
@@ -240,13 +239,13 @@ defmodule NsparkWeb.CoreComponents do
 
   def input(%{type: "select"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="mb-2">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="block text-sm font-medium text-gray-700 mb-1">{@label}</span>
         <select
           id={@id}
           name={@name}
-          class={[@class || "w-full select", @errors != [] && (@error_class || "select-error")]}
+          class={[@class || "w-full rounded border border-gray-300 px-3 py-2 text-sm bg-white", @errors != [] && (@error_class || "border-red-500")]}
           multiple={@multiple}
           {@rest}
         >
@@ -261,15 +260,15 @@ defmodule NsparkWeb.CoreComponents do
 
   def input(%{type: "textarea"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="mb-2">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="block text-sm font-medium text-gray-700 mb-1">{@label}</span>
         <textarea
           id={@id}
           name={@name}
           class={[
-            @class || "w-full textarea",
-            @errors != [] && (@error_class || "textarea-error")
+            @class || "w-full rounded border border-gray-300 px-3 py-2 text-sm",
+            @errors != [] && (@error_class || "border-red-500")
           ]}
           {@rest}
         >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
@@ -282,17 +281,17 @@ defmodule NsparkWeb.CoreComponents do
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="mb-2">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="block text-sm font-medium text-gray-700 mb-1">{@label}</span>
         <input
           type={@type}
           name={@name}
           id={@id}
           value={Phoenix.HTML.Form.normalize_value(@type, @value)}
           class={[
-            @class || "w-full input",
-            @errors != [] && (@error_class || "input-error")
+            @class || "w-full rounded border border-gray-300 px-3 py-2 text-sm",
+            @errors != [] && (@error_class || "border-red-500")
           ]}
           {@rest}
         />
@@ -305,7 +304,7 @@ defmodule NsparkWeb.CoreComponents do
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex gap-2 items-center text-sm text-error">
+    <p class="mt-1.5 flex gap-2 items-center text-sm text-red-600">
       <.icon name="hero-exclamation-circle" class="size-5" />
       {render_slot(@inner_block)}
     </p>
@@ -326,7 +325,7 @@ defmodule NsparkWeb.CoreComponents do
         <h1 class="text-lg font-semibold leading-8">
           {render_slot(@inner_block)}
         </h1>
-        <p :if={@subtitle != []} class="text-sm text-base-content/70">
+        <p :if={@subtitle != []} class="text-sm text-gray-500">
           {render_slot(@subtitle)}
         </p>
       </div>
@@ -367,7 +366,7 @@ defmodule NsparkWeb.CoreComponents do
       end
 
     ~H"""
-    <table class="table table-zebra">
+    <table class="min-w-full divide-y divide-gray-200 text-sm">
       <thead>
         <tr>
           <th :for={col <- @col}>{col[:label]}</th>
@@ -414,9 +413,9 @@ defmodule NsparkWeb.CoreComponents do
 
   def list(assigns) do
     ~H"""
-    <ul class="list">
-      <li :for={item <- @item} class="list-row">
-        <div class="list-col-grow">
+    <ul class="divide-y divide-gray-200">
+      <li :for={item <- @item} class="py-3">
+        <div class="flex-1">
           <div class="font-bold">{item.title}</div>
           <div>{render_slot(item)}</div>
         </div>

@@ -13,6 +13,37 @@ defmodule NsparkWeb.LiveUserAuth do
     {:cont, AshAuthentication.Phoenix.LiveSession.assign_new_resources(socket, session)}
   end
 
+  def on_mount(:live_user_and_tenant_required, _params, session, socket) do
+    if socket.assigns[:current_user] do
+      user = socket.assigns.current_user
+
+      memberships =
+        Nspark.Accounts.memberships_for_user!(user.id)
+        |> Ash.load!([:organization])
+
+      active_org_id = session["active_org_id"]
+
+      active_membership =
+        Enum.find(memberships, &(&1.organization_id == active_org_id)) ||
+          List.first(memberships)
+
+      if active_membership do
+        {:cont,
+         socket
+         |> assign(:current_org, active_membership.organization)
+         |> assign(:current_role, active_membership.role)
+         |> assign(:memberships, memberships)}
+      else
+        {:halt,
+         socket
+         |> Phoenix.LiveView.put_flash(:error, "No organization access found.")
+         |> Phoenix.LiveView.redirect(to: ~p"/sign-in")}
+      end
+    else
+      {:halt, Phoenix.LiveView.redirect(socket, to: ~p"/sign-in")}
+    end
+  end
+
   def on_mount(:live_user_optional, _params, _session, socket) do
     if socket.assigns[:current_user] do
       {:cont, socket}

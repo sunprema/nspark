@@ -35,4 +35,24 @@ defmodule NsparkWeb.ConnCase do
     Nspark.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc """
+  Logs a user into a conn by generating a valid JWT, recording it in the
+  tokens table (required by `require_token_presence_for_authentication?`),
+  and storing it in the session under `"user_token"`.
+  """
+  def log_in_user(conn, user) do
+    {:ok, token, _claims} = AshAuthentication.Jwt.token_for_user(user)
+
+    :ok =
+      AshAuthentication.TokenResource.Actions.store_token(
+        Nspark.Accounts.Token,
+        %{"token" => token, "purpose" => "user"},
+        []
+      )
+
+    conn
+    |> Phoenix.ConnTest.init_test_session(%{})
+    |> Plug.Conn.put_session("user_token", token)
+  end
 end
