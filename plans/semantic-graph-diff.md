@@ -3,7 +3,7 @@
 Source: `LIVE_PROMPT.md` brainstorm (the "prompt tree + diffing" idea, salvaged
 into the pull-based product) + product-positioning **P1 — variable/version
 contract**.
-Status: **Phase 1 complete** — contract extraction shipped; Phases 2–5 pending.
+Status: **Phases 1–2 complete** — contract extraction + diff engine shipped; Phases 3–5 pending.
 Owner: —
 Last updated: 2026-06-16
 
@@ -130,27 +130,28 @@ Make a version's input/output surface a first-class, comparable value.
 
 ## Phase 2 — Diff engine + classification (deterministic core)
 
-- [ ] `Nspark.VersionDiff.diff(old_snapshot, new_snapshot)` → 
-      ```elixir
-      %{
-        "level" => :breaking | :compatible | :cosmetic,
-        "variables" => %{"added" => [...], "removed" => [...], "renamed" => [%{from,to}]},
-        "outputs"   => %{"added" => [...], "removed" => [...]},
-        "provider"  => %{"from" => "...", "to" => "..."} | nil,
-        "nodes"     => [%{"id"=>, "label"=>, "change"=> :added|:removed|:retyped|:content}],
-        "reasons"   => ["new required variable :foo", ...]   # why it's breaking
-      }
-      ```
-- [ ] Node matching is by stable node `id` (snapshots preserve ids). A var
-      `removed` + `added` of equal count where the *only* difference is the name
-      is reported as a `renamed` heuristic and classed **breaking** (conservative).
-- [ ] `level` is the max severity across all deltas; unknown → breaking.
-- [ ] Per-node content change uses a line-level diff (use Elixir's
-      `String.myers_difference/2` — stdlib, no dep) to produce a compact
-      added/removed line summary for the UI; the engine returns the change *kind*
-      and the diff payload, the UI renders it.
-- [ ] Tests: one test per classification row in Decisions; plus identical
-      snapshots → `:cosmetic`/empty, and full-version add/remove of nodes.
+- [x] `Nspark.VersionDiff.diff(old_snapshot, new_snapshot)` returns
+      `%{"level", "variables" => %{"added","removed","renamed"}, "outputs" =>
+      %{"added","removed"}, "provider", "nodes", "reasons"}`. `level` is driven
+      by the contract deltas; per-node changes never exceed `:cosmetic` alone.
+- [x] Node matching is by stable `id`. Rename heuristic: a removed var and an
+      added var referenced by the **identical set of node ids** are paired as a
+      `renamed` and classed **breaking** (refs-based, deterministic — both sides
+      are breaking anyway, so this only sharpens the human-facing reason).
+- [x] `level` is the max severity across the variable/output/provider deltas
+      (`breaking > compatible > cosmetic`); ambiguous cases resolve to the
+      stricter side.
+- [x] Per-node content change emits a JSON-safe line-level diff
+      (`%{"added_lines","removed_lines"}`). **Deviation from spec:** used
+      `List.myers_difference/2` over split lines rather than
+      `String.myers_difference/2` — the latter is grapheme-level; line-level is
+      what the review UI needs and tuples-free output stays JSON-serializable for
+      Phase 3 storage. The engine returns the change *kind* + payload; UI renders.
+- [x] Tests: `test/nspark/version_diff_test.exs` `diff/2` block — one per
+      classification row (new var, rename, dropped output, removed var, provider
+      change, content-only, node add, retype), max-severity precedence, identical
+      → cosmetic/empty, and node-remove-with-contract-delta. Full suite green
+      (57 tests).
 
 ## Phase 3 — Publish-time gate
 

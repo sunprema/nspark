@@ -103,6 +103,191 @@ defmodule Nspark.VersionDiff do
 
   defp provider(_), do: nil
 
+  # ── diff (Phase 2) ───────────────────────────────────────────────────────────
+
+  # Severity ordering for `level`. The overall level is the max across all deltas.
+  @severity %{cosmetic: 0, compatible: 1, breaking: 2}
+
+  @doc """
+  Classify the change between two snapshots as `:breaking`, `:compatible`, or
+  `:cosmetic`, with the supporting deltas.
+
+  Returns:
+
+      %{
+        "level"     => :breaking | :compatible | :cosmetic,
+        "variables" => %{"added" => [..], "removed" => [..], "renamed" => [%{"from"=>, "to"=>}]},
+        "outputs"   => %{"added" => [..], "removed" => [..]},
+        "provider"  => %{"from" => .., "to" => ..} | nil,
+        "nodes"     => [%{"id"=>, "label"=>, "change"=> :added|:removed|:retyped|:content, ...}],
+        "reasons"   => ["requires new variable {foo}", ...]
+      }
+
+  Classification (conservative — unknown/ambiguous resolves to the stricter side):
+  a new required variable, a renamed variable, or a dropped output is
+  **breaking**; a removed variable, a provider change, or a new output is
+  **compatible**; content-only or pure structural node changes are **cosmetic**.
+
+  `level` is driven entirely by the contract deltas; per-node changes never
+  exceed `:cosmetic` on their own (a node change that alters the contract is
+  already reflected in the variable/output deltas).
+  """
+  @spec diff(map() | [map()], map() | [map()]) :: %{String.t() => term()}
+  def diff(old_snapshot, new_snapshot) do
+    old_c = contract(old_snapshot)
+    new_c = contract(new_snapshot)
+
+    {vars, var_level, var_reasons} = diff_variables(old_c, new_c)
+    {outs, out_level, out_reasons} = diff_outputs(old_c, new_c)
+    {prov, prov_level, prov_reasons} = diff_provider(old_c, new_c)
+    nodes = diff_nodes(old_snapshot, new_snapshot)
+
+    %{
+      "level" => max_level([var_level, out_level, prov_level]),
+      "variables" => vars,
+      "outputs" => outs,
+      "provider" => prov,
+      "nodes" => nodes,
+      "reasons" => var_reasons ++ out_reasons ++ prov_reasons
+    }
+  end
+
+  defp diff_variables(old_c, new_c) do
+    old_vars = old_c["variables"]
+    new_vars = new_c["variables"]
+    added = Map.keys(new_vars) -- Map.keys(old_vars)
+    removed = Map.keys(old_vars) -- Map.keys(new_vars)
+
+    # Rename heuristic: a removed var and an added var that are referenced by the
+    # exact same set of (stable) node ids are almost certainly a rename. Both are
+    # breaking, so this only sharpens the human-facing reason, not the level.
+    {renamed, added, removed} = detect_renames(added, removed, old_vars, new_vars)
+
+    delta = %{
+      "added" => Enum.sort(added),
+      "removed" => Enum.sort(removed),
+      "renamed" => renamed
+    }
+
+    reasons =
+      Enum.map(Enum.sort(added), &"requires new variable {#{&1}}") ++
+        Enum.map(renamed, &"variable renamed {#{&1["from"]}} → {#{&1["to"]}}") ++
+        Enum.map(Enum.sort(removed), &"variable {#{&1}} no longer referenced")
+
+    level =
+      cond do
+        added != [] or renamed != [] -> :breaking
+        removed != [] -> :compatible
+        true -> :cosmetic
+      end
+
+    {delta, level, reasons}
+  end
+
+  defp detect_renames(added, removed, old_vars, new_vars) do
+    Enum.reduce(removed, {[], added, []}, fn r, {renames, avail_added, still_removed} ->
+      r_refs = MapSet.new(old_vars[r]["refs"])
+
+      case Enum.find(avail_added, fn a -> MapSet.new(new_vars[a]["refs"]) == r_refs end) do
+        nil ->
+          {renames, avail_added, [r | still_removed]}
+
+        a ->
+          {[%{"from" => r, "to" => a} | renames], avail_added -- [a], still_removed}
+      end
+    end)
+  end
+
+  defp diff_outputs(old_c, new_c) do
+    added = old_c["outputs"] |> then(&(new_c["outputs"] -- &1)) |> Enum.sort()
+    removed = new_c["outputs"] |> then(&(old_c["outputs"] -- &1)) |> Enum.sort()
+
+    reasons =
+      Enum.map(removed, &"removed output `#{&1}`") ++
+        Enum.map(added, &"produces new output `#{&1}`")
+
+    # A dropped output breaks downstream parsing; a new one is additive.
+    level =
+      cond do
+        removed != [] -> :breaking
+        added != [] -> :compatible
+        true -> :cosmetic
+      end
+
+    {%{"added" => added, "removed" => removed}, level, reasons}
+  end
+
+  defp diff_provider(old_c, new_c) do
+    case {old_c["provider"], new_c["provider"]} do
+      {p, p} -> {nil, :cosmetic, []}
+      {from, to} -> {%{"from" => from, "to" => to}, :compatible, ["provider changed #{from} → #{to}"]}
+    end
+  end
+
+  defp diff_nodes(old_snapshot, new_snapshot) do
+    old_by_id = old_snapshot |> snapshot_nodes() |> Map.new(&{node_id(&1), &1})
+    new_by_id = new_snapshot |> snapshot_nodes() |> Map.new(&{node_id(&1), &1})
+
+    removed =
+      for {id, n} <- old_by_id, not Map.has_key?(new_by_id, id),
+          do: %{"id" => id, "label" => node_label(n), "change" => :removed}
+
+    added =
+      for {id, n} <- new_by_id, not Map.has_key?(old_by_id, id),
+          do: %{"id" => id, "label" => node_label(n), "change" => :added}
+
+    changed =
+      for {id, new_n} <- new_by_id, old_n = old_by_id[id], not is_nil(old_n), entry = node_change(old_n, new_n), into: [] do
+        entry
+      end
+
+    (removed ++ added ++ changed) |> Enum.reject(&is_nil/1)
+  end
+
+  # nil → unchanged; otherwise a change entry. Retype takes precedence over content.
+  defp node_change(old_n, new_n) do
+    cond do
+      node_type(old_n) != node_type(new_n) ->
+        %{
+          "id" => node_id(new_n),
+          "label" => node_label(new_n),
+          "change" => :retyped,
+          "from" => to_string(node_type(old_n)),
+          "to" => to_string(node_type(new_n))
+        }
+
+      node_content(old_n) != node_content(new_n) ->
+        %{
+          "id" => node_id(new_n),
+          "label" => node_label(new_n),
+          "change" => :content,
+          "diff" => line_diff(node_content(old_n), node_content(new_n))
+        }
+
+      true ->
+        nil
+    end
+  end
+
+  # Compact, JSON-safe line-level diff via stdlib `List.myers_difference/2`.
+  # (The plan referenced `String.myers_difference/2`, but that is grapheme-level;
+  # line-level over split content is what the review UI needs and stays JSON-safe.)
+  defp line_diff(old, new) do
+    ops = List.myers_difference(lines(old), lines(new))
+    %{
+      "added_lines" => for({:ins, ls} <- ops, l <- ls, do: l),
+      "removed_lines" => for({:del, ls} <- ops, l <- ls, do: l)
+    }
+  end
+
+  defp lines(nil), do: []
+  defp lines(s) when is_binary(s), do: String.split(s, "\n")
+  defp lines(_), do: []
+
+  defp max_level(levels) do
+    Enum.max_by(levels, &Map.fetch!(@severity, &1))
+  end
+
   # ── snapshot / node accessors (string-keyed snapshots and atom-keyed structs) ──
 
   defp snapshot_nodes(%{"nodes" => nodes}) when is_list(nodes), do: nodes
@@ -117,6 +302,10 @@ defmodule Nspark.VersionDiff do
   defp node_content(%{"content" => c}), do: c
   defp node_content(%{content: c}), do: c
   defp node_content(_), do: nil
+
+  defp node_label(%{"label" => l}), do: l
+  defp node_label(%{label: l}), do: l
+  defp node_label(_), do: nil
 
   defp node_metadata(%{"metadata" => m}) when is_map(m), do: m
   defp node_metadata(%{metadata: m}) when is_map(m), do: m
