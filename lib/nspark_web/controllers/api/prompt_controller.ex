@@ -38,6 +38,36 @@ defmodule NsparkWeb.Api.PromptController do
 
   @immutable_max_age 31_536_000
 
+  @doc """
+  List the prompts this caller can resolve — the discovery surface behind an MCP
+  `prompts/list` or an SDK index. Scope (tenant/project/environment) is taken
+  from the API key exactly as in `show/2`; an environment-scoped key lists only
+  what's live in that environment. The listing is dynamic, so it is `no-store`.
+  """
+  def index(conn, _params) do
+    api_key = conn.assigns[:api_key]
+    user = conn.assigns[:current_user]
+
+    cond do
+      api_key ->
+        result =
+          Nspark.PromptDelivery.list(
+            tenant: api_key.organization_id,
+            project_id: api_key.project_id,
+            environment: api_key.environment,
+            authorize?: false
+          )
+
+        render_list(conn, api_key.environment, api_key.project_id, result)
+
+      user ->
+        render_list(conn, nil, nil, list_across_tenants(user))
+
+      true ->
+        error(conn, 401, "unauthorized")
+    end
+  end
+
   def show(conn, %{"slug" => slug} = params) do
     api_key = conn.assigns[:api_key]
     user = conn.assigns[:current_user]
@@ -106,6 +136,49 @@ defmodule NsparkWeb.Api.PromptController do
         {:error, :prompt_not_found} -> {:cont, acc}
       end
     end)
+  end
+
+  # Merge every org the caller belongs to, deduping by slug (the first org to
+  # claim a slug wins, mirroring `resolve_across_tenants/3`'s first-hit order).
+  defp list_across_tenants(user) do
+    prompts =
+      user.id
+      |> Nspark.Accounts.memberships_for_user!()
+      |> Enum.flat_map(fn m ->
+        case Nspark.PromptDelivery.list(tenant: m.organization_id, actor: user) do
+          {:ok, list} -> list
+          _ -> []
+        end
+      end)
+      |> Enum.uniq_by(& &1.slug)
+
+    {:ok, prompts}
+  end
+
+  defp render_list(conn, _env, _project_id, {:error, _reason}) do
+    error(conn, 500, "failed to list prompts")
+  end
+
+  defp render_list(conn, env, project_id, {:ok, prompts}) do
+    conn
+    |> put_resp_header("cache-control", "no-store")
+    |> json(%{
+      scope: %{
+        environment: env && Atom.to_string(env),
+        project_scoped: not is_nil(project_id)
+      },
+      prompts:
+        Enum.map(prompts, fn p ->
+          %{
+            slug: p.slug,
+            name: p.name,
+            description: p.description,
+            version: p.version,
+            resolved_via: p.resolved_via,
+            published_at: p.published_at
+          }
+        end)
+    })
   end
 
   defp render_prompt(conn, %{graph: graph, version: version, resolved_via: via, compiled: compiled}) do

@@ -61,6 +61,105 @@ defmodule Nspark.PromptDelivery do
     end
   end
 
+  @type summary :: %{
+          slug: String.t(),
+          name: String.t(),
+          description: String.t() | nil,
+          version: pos_integer(),
+          resolved_via: String.t(),
+          published_at: DateTime.t()
+        }
+
+  @doc """
+  List the prompts resolvable within a scope — the discovery counterpart to
+  `resolve/3` (e.g. for an MCP `prompts/list` or an SDK index call).
+
+  Resolution mirrors a no-qualifier `resolve/3`:
+
+    * An **environment-scoped** caller (`environment:` set) sees only prompts with
+      an active deployment in that environment, reporting the version live there.
+    * Otherwise every prompt with at least one published version is returned,
+      reporting its latest version.
+
+  Opts mirror `resolve/3`: `tenant`, `actor`/`authorize?`, optional `project_id`,
+  and optional `environment` (atom). A draft graph with no published version is
+  never listed, so a slug that appears here always resolves.
+  """
+  @spec list(keyword()) :: {:ok, [summary()]} | {:error, term()}
+  def list(opts) do
+    {project_id, opts} = Keyword.pop(opts, :project_id)
+    {environment, opts} = Keyword.pop(opts, :environment)
+
+    case environment do
+      nil -> list_latest(project_id, opts)
+      env -> list_environment(env, project_id, opts)
+    end
+  end
+
+  defp list_latest(project_id, opts) do
+    with {:ok, graphs} <- Graph |> scope_project(project_id) |> Ash.read(opts) do
+      latest = latest_versions(Enum.map(graphs, & &1.id), opts)
+
+      {:ok,
+       graphs
+       |> Enum.flat_map(fn g ->
+         case Map.fetch(latest, g.id) do
+           {:ok, v} -> [summary(g, v.version_number, "latest", v.inserted_at)]
+           :error -> []
+         end
+       end)
+       |> Enum.sort_by(& &1.name)}
+    end
+  end
+
+  # Highest published version per graph, in one read. `select` keeps the heavy
+  # `graph_snapshot` off the wire — only the numbers we surface are loaded.
+  defp latest_versions([], _opts), do: %{}
+
+  defp latest_versions(graph_ids, opts) do
+    GraphVersion
+    |> filter(graph_id in ^graph_ids)
+    |> Ash.Query.select([:graph_id, :version_number, :inserted_at])
+    |> sort(version_number: :desc)
+    |> Ash.read!(opts)
+    |> Enum.reduce(%{}, fn v, acc -> Map.put_new(acc, v.graph_id, v) end)
+  end
+
+  defp list_environment(env, project_id, opts) do
+    with {:ok, deployments} <-
+           Deployment
+           |> filter(environment == ^env and status == :active)
+           |> scope_project(project_id)
+           |> sort(inserted_at: :desc)
+           |> load(graph_version: :graph)
+           |> Ash.read(opts) do
+      via = "environment:#{env}"
+
+      {:ok,
+       deployments
+       # most-recent-first, so the first deployment seen per graph is the live one
+       |> Enum.uniq_by(& &1.graph_version.graph.id)
+       |> Enum.map(fn d ->
+         summary(d.graph_version.graph, d.graph_version.version_number, via, d.inserted_at)
+       end)
+       |> Enum.sort_by(& &1.name)}
+    end
+  end
+
+  defp scope_project(query, nil), do: query
+  defp scope_project(query, project_id), do: filter(query, project_id == ^project_id)
+
+  defp summary(graph, version_number, via, published_at) do
+    %{
+      slug: graph.slug,
+      name: graph.name,
+      description: graph.description,
+      version: version_number,
+      resolved_via: via,
+      published_at: published_at
+    }
+  end
+
   defp fetch_graph(slug, project_id, opts) do
     query = if project_id, do: filter(Graph, project_id == ^project_id), else: Graph
 

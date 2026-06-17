@@ -1,0 +1,29 @@
+{
+  "name": "nspark-mcp",
+  "version": "0.1.0",
+  "description": "Model Context Protocol server exposing Newtonian Spark prompts to agents",
+  "type": "module",
+  "bin": {
+    "nspark-mcp": "./dist/index.js"
+  },
+  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["mcp", "model-context-protocol", "prompt", "llm", "ai", "nspark"],
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "nspark": "file:../typescript",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}

@@ -58,6 +58,7 @@ defmodule NsparkWeb.Router do
   scope "/api/v1", NsparkWeb.Api do
     pipe_through [:api_runtime]
 
+    get "/prompts", PromptController, :index
     get "/prompts/:slug", PromptController, :show
   end
 
