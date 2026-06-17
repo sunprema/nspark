@@ -151,6 +151,122 @@ defmodule NsparkWeb.Api.PromptControllerTest do
     end
   end
 
+  describe "api key auth" do
+    test "an org-scoped key resolves the prompt", %{org: org, user: user, graph: graph} do
+      conn = key_conn(issue(org, user, %{name: "k"})) |> get("/api/v1/prompts/#{graph.slug}")
+      assert json_response(conn, 200)["version"] == 2
+    end
+
+    test "the key also works as an Authorization: Bearer credential", %{
+      org: org,
+      user: user,
+      graph: graph
+    } do
+      secret = issue(org, user, %{name: "k"})
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{secret}")
+        |> get("/api/v1/prompts/#{graph.slug}")
+
+      assert json_response(conn, 200)["version"] == 2
+    end
+
+    test "stamps last_used_at on use", %{org: org, user: user, graph: graph} do
+      secret = issue(org, user, %{name: "k"})
+      key_conn(secret) |> get("/api/v1/prompts/#{graph.slug}")
+
+      {:ok, key} = Nspark.Accounts.get_api_key_by_hash(Nspark.Accounts.ApiKey.hash_secret(secret))
+      assert key.last_used_at
+    end
+
+    test "401 for an unknown key", %{graph: graph} do
+      conn = key_conn("nsk_totally-bogus") |> get("/api/v1/prompts/#{graph.slug}")
+      assert json_response(conn, 401)["error"] =~ "invalid api key"
+    end
+
+    test "401 for a revoked key", %{org: org, user: user, graph: graph} do
+      secret = issue(org, user, %{name: "k"})
+      {:ok, key} = Nspark.Accounts.get_api_key_by_hash(Nspark.Accounts.ApiKey.hash_secret(secret))
+      Nspark.Accounts.revoke_api_key!(key, actor: user)
+
+      conn = key_conn(secret) |> get("/api/v1/prompts/#{graph.slug}")
+      assert json_response(conn, 401)["error"] =~ "revoked or expired"
+    end
+
+    test "a project-scoped key only sees prompts in its project", %{
+      org: org,
+      user: user,
+      project: project,
+      graph: graph
+    } do
+      in_scope = issue(org, user, %{name: "in", project_id: project.id})
+      assert key_conn(in_scope) |> get("/api/v1/prompts/#{graph.slug}") |> json_response(200)
+
+      other = Ash.create!(Project, %{name: "Other", status: :active}, tenant: org.id, authorize?: false)
+      out_scope = issue(org, user, %{name: "out", project_id: other.id})
+      body = key_conn(out_scope) |> get("/api/v1/prompts/#{graph.slug}") |> json_response(404)
+      assert body["error"] == "prompt not found"
+    end
+
+    test "an environment-scoped key is limited to its environment alias", %{
+      org: org,
+      user: user,
+      project: project,
+      graph: graph,
+      v2: v2
+    } do
+      Nspark.Deployments.deploy_version(
+        %{
+          environment: :production,
+          project_id: project.id,
+          graph_version_id: v2.id,
+          deployed_version: v2.version_number
+        },
+        tenant: org.id,
+        actor: user
+      )
+
+      secret = issue(org, user, %{name: "prod", environment: :production})
+
+      ok = key_conn(secret) |> get("/api/v1/prompts/#{graph.slug}?environment=production")
+      assert json_response(ok, 200)["resolved_via"] == "environment:production"
+
+      denied = key_conn(secret) |> get("/api/v1/prompts/#{graph.slug}?environment=staging")
+      assert json_response(denied, 403)["error"] =~ "not scoped to that environment"
+    end
+  end
+
+  describe "rate limiting" do
+    test "throttles a principal once its limit is exceeded", %{org: org, user: user, graph: graph} do
+      original = Application.get_env(:nspark, NsparkWeb.RateLimit)
+      Application.put_env(:nspark, NsparkWeb.RateLimit, limit: 2, window_ms: 60_000)
+      on_exit(fn -> Application.put_env(:nspark, NsparkWeb.RateLimit, original) end)
+
+      secret = issue(org, user, %{name: "limited"})
+      hit = fn -> key_conn(secret) |> get("/api/v1/prompts/#{graph.slug}") end
+
+      assert hit.().status == 200
+      ok = hit.()
+      assert ok.status == 200
+      assert get_resp_header(ok, "x-ratelimit-limit") == ["2"]
+      assert get_resp_header(ok, "x-ratelimit-remaining") == ["0"]
+
+      throttled = hit.()
+      assert throttled.status == 429
+      assert [_] = get_resp_header(throttled, "retry-after")
+      assert json_response(throttled, 429)["error"] =~ "rate limit"
+    end
+  end
+
+  defp issue(org, user, attrs) do
+    attrs = Map.merge(%{organization_id: org.id}, attrs)
+    key = Nspark.Accounts.issue_api_key!(attrs, actor: user)
+    Ash.Resource.get_metadata(key, :plaintext)
+  end
+
+  defp key_conn(secret), do: put_req_header(build_conn(), "x-api-key", secret)
+
   # Attach a stored bearer token so the :api pipeline's load_from_bearer resolves
   # the current_user, mirroring how a real client calls the runtime API.
   defp api_conn(conn, user) do

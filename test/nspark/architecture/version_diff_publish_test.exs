@@ -3,8 +3,9 @@ defmodule Nspark.Architecture.VersionDiffPublishTest do
 
   alias Nspark.Accounts.{Membership, Organization}
   alias Nspark.Architecture
-  alias Nspark.Architecture.{Graph, Node}
+  alias Nspark.Architecture.{Edge, Graph, Node}
   alias Nspark.Projects.Project
+  require Ash.Query
 
   setup do
     org = Ash.create!(Organization, %{name: "Diff", slug: "diff-org"})
@@ -78,6 +79,35 @@ defmodule Nspark.Architecture.VersionDiffPublishTest do
              )
 
     assert [_only_one] = Architecture.versions_for_graph!(graph.id, ctx.t)
+  end
+
+  test "publish preserves edge branch metadata so branch-only variables are optional", ctx do
+    # A conditional gate routes to a constraint on its "yes" branch; the
+    # constraint's variable is needed only when the branch fires. This goes
+    # through the real path (serialize_snapshot → contract), which previously
+    # dropped edge metadata and marked every variable required.
+    gate = Ash.create!(Node, %{type: :conditional, label: "Gate", content: "{score} > 0.8", graph_id: ctx.graph.id}, ctx.t)
+
+    branch_target =
+      Ash.create!(Node, %{type: :constraint, label: "Escalate", content: "Notify {oncall}", graph_id: ctx.graph.id}, ctx.t)
+
+    Ash.create!(
+      Edge,
+      %{
+        graph_id: ctx.graph.id,
+        source_node_id: gate.id,
+        target_node_id: branch_target.id,
+        metadata: %{"branch" => "yes"}
+      },
+      ctx.t
+    )
+
+    edges = Edge |> Ash.Query.filter(graph_id == ^ctx.graph.id) |> Ash.read!(ctx.t)
+    {:ok, version} = Architecture.publish_graph(ctx.graph, [gate, branch_target], edges, ctx.user, ctx.org.id)
+
+    vars = version.input_contract["variables"]
+    assert vars["score"]["required"] == true
+    assert vars["oncall"]["required"] == false
   end
 
   test "a breaking change publishes with acknowledgement and a changelog", ctx do

@@ -17,8 +17,9 @@ defmodule Nspark.VersionDiff do
   """
 
   # Canonical prompt-variable syntax: a single-brace `{name}` reference. This is
-  # the ONE definition of "what is a variable"; `Nspark.Diagnostics` delegates
-  # here so the contract and the `:undefined_variable` check can never disagree.
+  # the ONE definition of "what is a variable"; `Nspark.Diagnostics` derives its
+  # input-contract summary from `contract/1` here so the diagnostics panel and the
+  # published contract can never disagree on what the graph requires of callers.
   @var_regex ~r/\{([a-zA-Z_]\w*)\}/
 
   @type contract :: %{
@@ -48,20 +49,28 @@ defmodule Nspark.VersionDiff do
         "provider"  => "anthropic" | nil
       }
 
-  v1 treats every referenced `{var}` as a required string input (no typed schema
-  yet). `outputs` are the `output_var`s declared on agent nodes. `provider` is
-  echoed only if the snapshot pins one; provider-agnostic versions get `nil`
-  rather than a guess.
+  Each `{var}` is treated as a required string input **unless** it is referenced
+  only by nodes that sit on a conditional branch — those are needed only when the
+  branch fires, so they are marked `"required" => false`. A variable referenced by
+  any unconditional node is required (conservative: if in doubt, required, so the
+  SDK never lets a genuinely-needed variable go unsupplied). No typed schema yet.
+  A variable produced by an agent node's `output_var` is bound internally by that
+  sub-agent, so it is excluded from `variables` (it appears under `outputs`) even
+  when a downstream node references it. `outputs` are the `output_var`s declared
+  on agent nodes. `provider` is echoed
+  only if the snapshot pins one; provider-agnostic versions get `nil` rather than
+  a guess.
 
-  Accepts either the full snapshot map (`%{"nodes" => [...]}`) or a bare list of
-  nodes.
+  Accepts either the full snapshot map (`%{"nodes" => [...], "edges" => [...]}`)
+  or a bare list of nodes (no edges ⇒ every variable is required).
   """
   @spec contract(map() | [map()]) :: %{String.t() => term()}
   def contract(snapshot) do
     nodes = snapshot_nodes(snapshot)
+    edges = snapshot_edges(snapshot)
 
     %{
-      "variables" => variables_contract(nodes),
+      "variables" => variables_contract(nodes, edges),
       "outputs" => outputs(nodes),
       "provider" => provider(snapshot)
     }
@@ -69,16 +78,44 @@ defmodule Nspark.VersionDiff do
 
   # ── contract pieces ─────────────────────────────────────────────────────────
 
-  defp variables_contract(nodes) do
+  defp variables_contract(nodes, edges) do
+    optional_node_ids = conditional_branch_target_ids(nodes, edges)
+
+    # A variable produced by an agent node's `output_var` is bound internally at
+    # runtime by that sub-agent — it is NOT something the calling app supplies, so
+    # it never belongs in the input contract even when a downstream node references
+    # `{it}`. It surfaces under `outputs` instead. (Producing wins over consuming:
+    # if a name is both produced and referenced, it is an output, not an input.)
+    produced = MapSet.new(outputs(nodes))
+
     nodes
     |> Enum.flat_map(fn n ->
       id = node_id(n)
       n |> node_content() |> variables_in() |> Enum.map(&{&1, id})
     end)
     |> Enum.group_by(fn {name, _id} -> name end, fn {_name, id} -> id end)
+    |> Enum.reject(fn {name, _ids} -> MapSet.member?(produced, name) end)
     |> Map.new(fn {name, ids} ->
-      {name, %{"required" => true, "refs" => Enum.uniq(ids)}}
+      ids = Enum.uniq(ids)
+      required = not Enum.all?(ids, &MapSet.member?(optional_node_ids, &1))
+      {name, %{"required" => required, "refs" => ids}}
     end)
+  end
+
+  # Nodes that are the target of a conditional node along a yes/no branch edge.
+  # Their content is included only when the branch fires, so any variable used
+  # *exclusively* by such nodes is optional. (v1 looks one hop from the
+  # conditional; deeper branch-only chains still resolve to required — the safe
+  # side.)
+  defp conditional_branch_target_ids(nodes, edges) do
+    conditional_ids =
+      for n <- nodes, node_type(n) == :conditional, into: MapSet.new(), do: node_id(n)
+
+    for e <- edges,
+        edge_branch(e) in ["yes", "no"],
+        MapSet.member?(conditional_ids, edge_source(e)),
+        into: MapSet.new(),
+        do: edge_target(e)
   end
 
   defp outputs(nodes) do
@@ -116,7 +153,7 @@ defmodule Nspark.VersionDiff do
 
       %{
         "level"     => :breaking | :compatible | :cosmetic,
-        "variables" => %{"added" => [..], "removed" => [..], "renamed" => [%{"from"=>, "to"=>}]},
+        "variables" => %{"added" => [..], "removed" => [..], "renamed" => [%{"from"=>, "to"=>}], "tightened" => [..]},
         "outputs"   => %{"added" => [..], "removed" => [..]},
         "provider"  => %{"from" => .., "to" => ..} | nil,
         "nodes"     => [%{"id"=>, "label"=>, "change"=> :added|:removed|:retyped|:content, ...}],
@@ -163,26 +200,45 @@ defmodule Nspark.VersionDiff do
     # breaking, so this only sharpens the human-facing reason, not the level.
     {renamed, added, removed} = detect_renames(added, removed, old_vars, new_vars)
 
+    # A newly *required* variable breaks callers; a new *optional* one (used only
+    # inside a conditional branch) is additive. Likewise a variable that was
+    # optional and is now required has been tightened — that breaks callers who
+    # legitimately omitted it.
+    {added_required, added_optional} = Enum.split_with(added, &required?(new_vars[&1]))
+
+    tightened =
+      for k <- Map.keys(old_vars),
+          k in Map.keys(new_vars),
+          not required?(old_vars[k]),
+          required?(new_vars[k]),
+          do: k
+
     delta = %{
       "added" => Enum.sort(added),
       "removed" => Enum.sort(removed),
-      "renamed" => renamed
+      "renamed" => renamed,
+      "tightened" => Enum.sort(tightened)
     }
 
     reasons =
-      Enum.map(Enum.sort(added), &"requires new variable {#{&1}}") ++
+      Enum.map(Enum.sort(added_required), &"requires new variable {#{&1}}") ++
+        Enum.map(Enum.sort(added_optional), &"accepts new optional variable {#{&1}}") ++
         Enum.map(renamed, &"variable renamed {#{&1["from"]}} → {#{&1["to"]}}") ++
+        Enum.map(Enum.sort(tightened), &"variable {#{&1}} is now always required") ++
         Enum.map(Enum.sort(removed), &"variable {#{&1}} no longer referenced")
 
     level =
       cond do
-        added != [] or renamed != [] -> :breaking
-        removed != [] -> :compatible
+        added_required != [] or renamed != [] or tightened != [] -> :breaking
+        added_optional != [] or removed != [] -> :compatible
         true -> :cosmetic
       end
 
     {delta, level, reasons}
   end
+
+  defp required?(spec) when is_map(spec), do: Map.get(spec, "required", true) != false
+  defp required?(_), do: true
 
   defp detect_renames(added, removed, old_vars, new_vars) do
     Enum.reduce(removed, {[], added, []}, fn r, {renames, avail_added, still_removed} ->
@@ -219,8 +275,11 @@ defmodule Nspark.VersionDiff do
 
   defp diff_provider(old_c, new_c) do
     case {old_c["provider"], new_c["provider"]} do
-      {p, p} -> {nil, :cosmetic, []}
-      {from, to} -> {%{"from" => from, "to" => to}, :compatible, ["provider changed #{from} → #{to}"]}
+      {p, p} ->
+        {nil, :cosmetic, []}
+
+      {from, to} ->
+        {%{"from" => from, "to" => to}, :compatible, ["provider changed #{from} → #{to}"]}
     end
   end
 
@@ -229,15 +288,21 @@ defmodule Nspark.VersionDiff do
     new_by_id = new_snapshot |> snapshot_nodes() |> Map.new(&{node_id(&1), &1})
 
     removed =
-      for {id, n} <- old_by_id, not Map.has_key?(new_by_id, id),
+      for {id, n} <- old_by_id,
+          not Map.has_key?(new_by_id, id),
           do: %{"id" => id, "label" => node_label(n), "change" => :removed}
 
     added =
-      for {id, n} <- new_by_id, not Map.has_key?(old_by_id, id),
+      for {id, n} <- new_by_id,
+          not Map.has_key?(old_by_id, id),
           do: %{"id" => id, "label" => node_label(n), "change" => :added}
 
     changed =
-      for {id, new_n} <- new_by_id, old_n = old_by_id[id], not is_nil(old_n), entry = node_change(old_n, new_n), into: [] do
+      for {id, new_n} <- new_by_id,
+          old_n = old_by_id[id],
+          not is_nil(old_n),
+          entry = node_change(old_n, new_n),
+          into: [] do
         entry
       end
 
@@ -274,6 +339,7 @@ defmodule Nspark.VersionDiff do
   # line-level over split content is what the review UI needs and stays JSON-safe.)
   defp line_diff(old, new) do
     ops = List.myers_difference(lines(old), lines(new))
+
     %{
       "added_lines" => for({:ins, ls} <- ops, l <- ls, do: l),
       "removed_lines" => for({:del, ls} <- ops, l <- ls, do: l)
@@ -294,6 +360,24 @@ defmodule Nspark.VersionDiff do
   defp snapshot_nodes(%{nodes: nodes}) when is_list(nodes), do: nodes
   defp snapshot_nodes(nodes) when is_list(nodes), do: nodes
   defp snapshot_nodes(_), do: []
+
+  # A bare node list carries no edges, so optionality can't be derived from it —
+  # those callers get every variable marked required (the safe default).
+  defp snapshot_edges(%{"edges" => edges}) when is_list(edges), do: edges
+  defp snapshot_edges(%{edges: edges}) when is_list(edges), do: edges
+  defp snapshot_edges(_), do: []
+
+  defp edge_source(%{"source_node_id" => id}), do: id
+  defp edge_source(%{source_node_id: id}), do: id
+  defp edge_source(_), do: nil
+
+  defp edge_target(%{"target_node_id" => id}), do: id
+  defp edge_target(%{target_node_id: id}), do: id
+  defp edge_target(_), do: nil
+
+  defp edge_branch(%{"metadata" => %{"branch" => b}}), do: b
+  defp edge_branch(%{metadata: %{"branch" => b}}), do: b
+  defp edge_branch(_), do: nil
 
   defp node_id(%{"id" => id}), do: id
   defp node_id(%{id: id}), do: id

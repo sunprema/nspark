@@ -10,6 +10,11 @@ defmodule Nspark.Orchestrator do
   them after dispatch and replaces {output_var} placeholders with the actual
   sub-agent output.
 
+  Orchestration is one level deep: a dispatched sub-agent whose own graph
+  contains agent nodes is rejected with an explicit error rather than having its
+  raw `[AGENT: ...]` directives leak into the parent output. Recursive
+  orchestration is Phase 3 (parked) — see MULTI_AGENT.md.
+
   See MULTI_AGENT.md for the full design and phased roadmap.
   """
 
@@ -79,7 +84,13 @@ defmodule Nspark.Orchestrator do
   def parse(compiled_text) do
     directives =
       Regex.scan(@directive_re, compiled_text, capture: :all)
-      |> Enum.map(fn [_full, output_var, label, dep_part, inputs_text, on_error, timeout_str, when_str] ->
+      |> Enum.map(fn captures ->
+        # The trailing `when:` group is optional, so `Regex.scan` yields 7 captures
+        # (no condition) or 8 (with one). Match the fixed head and treat the rest
+        # as the optional when-expression.
+        [_full, output_var, label, dep_part, inputs_text, on_error, timeout_str | rest] = captures
+        when_str = List.first(rest) || ""
+
         %{
           output_var: output_var,
           label: label,
@@ -265,7 +276,7 @@ defmodule Nspark.Orchestrator do
     {:error, "Agent \"#{label}\" has no pinned deployment"}
   end
 
-  defp dispatch_one(%{deployment_id: dep_id, inputs: inputs}, vars, opts) do
+  defp dispatch_one(%{deployment_id: dep_id, inputs: inputs, label: label}, vars, opts) do
     tenant = opts[:tenant]
     ash_opts = [authorize?: false] ++ if(tenant, do: [tenant: tenant], else: [])
 
@@ -280,7 +291,22 @@ defmodule Nspark.Orchestrator do
       nodes = Map.get(snapshot, "nodes", [])
       edges = Map.get(snapshot, "edges", [])
       compiled = Nspark.Compiler.compile(nodes, edges)
-      {:ok, render(compiled.markdown, resolved_inputs)}
+
+      # A sub-agent whose own graph contains (unmuted) agent nodes compiles to an
+      # artifact with its own [AGENT: ...] directives. We do not recursively
+      # orchestrate (Phase 3, parked), so rendering it as-is would leak raw
+      # directive text into the parent prompt as if it were a real result. Fail
+      # loudly instead — `on_error` still decides whether that halts the run or
+      # degrades this output to nil.
+      case parse(compiled.markdown) do
+        {[], _template} ->
+          {:ok, render(compiled.markdown, resolved_inputs)}
+
+        {[_ | _], _template} ->
+          {:error,
+           "Agent \"#{label}\" expands to a sub-graph that itself contains agent nodes; " <>
+             "nested orchestration is not supported"}
+      end
     else
       {:error, reason} -> {:error, reason}
     end

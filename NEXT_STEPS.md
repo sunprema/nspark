@@ -68,10 +68,13 @@ investing further until the core registry story (P0–P2 below) is airtight.
 Before parking, close the one correctness landmine so it can't ship a wrong
 result silently:
 
-- [ ] Nested agents fail silently today — `Orchestrator.dispatch_one/3` compiles
-  a sub-agent snapshot but doesn't re-orchestrate it, leaking raw `[AGENT: …]`
-  text into the parent output. Detect agent nodes in a sub-agent snapshot and
-  return an explicit error instead. (Full Phase 3 stays parked.)
+- [x] Nested agents no longer fail silently — `Orchestrator.dispatch_one/3`
+  compiles a sub-agent snapshot and now parses it for `[AGENT: …]` directives; if
+  the sub-graph itself contains agent nodes it returns an explicit error
+  (`on_error` still decides halt-vs-degrade) instead of leaking raw directive text
+  into the parent output. Also fixed a latent crash in `parse/1`: a directive with
+  no optional `when:` clause yields 7 regex captures, not 8, and used to raise.
+  Covered by `test/nspark/orchestrator_test.exs`. (Full Phase 3 stays parked.)
 
 Phase 3 items (hierarchical orchestration, depth limits, execution trace,
 cross-graph inspector) remain in the backlog but **below** everything in P0–P3.
@@ -92,36 +95,83 @@ contract around it.
   identifier on `Graph`, auto-derived from name. Resolver:
   `Nspark.PromptDelivery`; controller: `NsparkWeb.Api.PromptController`.
   Still on bearer-token auth — scoped keys (next item) will replace it.
-- [ ] **Scoped API keys** per project/environment (not just a user bearer token);
-  key issuance + revocation UI; audit of API access.
+- [x] **Scoped API keys** per project/environment (not just a user bearer token);
+  key issuance + revocation UI; audit of API access. Global `Nspark.Accounts.ApiKey`
+  (hashed secret; org + optional project + optional environment scope), `NsparkWeb.ApiKeyAuth`
+  plug on the `:api_runtime` pipeline (key is the principal; env-scoped keys are
+  limited to their env alias), admin-only `/org/api-keys` management screen
+  (issue → show plaintext once, revoke). Audit via `created_by`/`revoked_by`/
+  `last_used_at` columns. (A per-request access log is still future work.)
 - [ ] **Caching + delivery** — strong ETag / `Cache-Control`, immutable pinned
   versions are infinitely cacheable; document a CDN-frontable contract.
-- [ ] **Client SDK** (start with one language) — fetches by pinned version,
-  caches locally, **falls back to last-known-good on our outage**, validates
-  injected variables against the published schema before substituting.
-- [ ] **Rate limiting** on `/api/v1/*` (per key / per org).
+- [x] **Client SDK** (Python `clients/python/`, TypeScript `clients/typescript/`,
+  Elixir `clients/elixir/`) — `Client` fetches by pinned version, caches locally
+  (immutable pinned versions cached forever; moving aliases revalidated via
+  `If-None-Match`/304), **falls back to last-known-good on our outage**
+  (in-memory by default, durable via a file-backed cache), and validates
+  injected variables against the published input contract before substituting
+  (`Prompt.render`). Honors `429`/`retry-after` with retries+backoff. ~19 tests
+  each (Python `responses`; TS vitest + fetch stub; Elixir ExUnit + injected
+  request fn). TS runs on Node 18+/any `fetch` runtime; Elixir uses Req with a
+  `Nspark.Cache` protocol for pluggable backing stores.
+- [x] **Rate limiting** on `/api/v1/*` (per key / per org). Dependency-free ETS
+  fixed-window limiter (`Nspark.RateLimiter`, supervised, atomic `update_counter`
+  + periodic sweep) behind the `NsparkWeb.RateLimit` plug on both API pipelines.
+  Buckets by API key → user → IP; emits `x-ratelimit-*` headers and `429` +
+  `retry-after`. Limits configurable (`config :nspark, NsparkWeb.RateLimit`).
 - [ ] Define and publish a retrieval **SLA / latency budget**; add a health/
   readiness endpoint.
 
 ---
 
-## P1 — The variable / version contract (biggest correctness risk)
+## P1 — The variable / version contract (largely shipped)
 
 A prompt edit that renames or drops a variable must not silently break a
 deployed app. The graph already knows its variables — publish that as a contract.
+**Most of this shipped** in the semantic-graph-diff work (Phases 1–4) plus the
+client SDKs; the contract is the single source of truth `Nspark.VersionDiff`,
+which `Nspark.Diagnostics` also delegates to so the studio lint and the published
+contract can never disagree.
 
-- [ ] **Published input schema per `GraphVersion`** — on publish, derive the set
-  of required `{variables}` (names, and where typed, the expected shape) and
-  store it on the snapshot. Expose it via the retrieval endpoint.
-- [ ] **Client-side validation** — SDK rejects/raises when the app fails to
-  supply a required variable, before the prompt is used.
-- [ ] **Breaking-change detection on publish** — diff the new version's required
-  variables against the currently-deployed version; warn/block if a variable
-  consumed by a live deployment is removed or renamed.
-- [ ] **Compatibility surfacing in studio** — show "this change breaks deployment
-  X (prod)" before the author publishes.
-- [ ] Extend the existing variable diagnostics (undefined/unused) to feed this
-  contract rather than being studio-only.
+- [x] **Published input schema per `GraphVersion`** — `VersionDiff.contract/1`
+  derives the required `{variables}` (and their referencing node ids) on publish
+  and freezes them on `GraphVersion.input_contract`; the retrieval endpoint
+  returns it as `input_schema` (`PromptController`).
+- [x] **Optional variables** — a `{var}` referenced only by conditional-branch
+  targets is marked `required: false` (conservative: any unconditional reference
+  ⇒ required). `diff/2` treats a new optional var as compatible and an
+  optional→required flip ("tightened") as breaking. (Gap B.)
+- [x] **Client-side validation** — Python/TS/Elixir SDKs validate supplied
+  variables against `input_schema` and raise (`MissingVariablesError` &c.) before
+  substituting; they honor `required: false`.
+- [x] **Breaking-change detection on publish** — `Architecture.publish_graph/6`
+  diffs against the previous published version and gates a `:breaking` change
+  behind `acknowledge_breaking: true` + a changelog. This protects `@latest`
+  consumers (publishing advances `@latest`).
+- [x] **Breaking-change detection on deploy** — `Architecture.deploy_impact/3`
+  diffs the version being deployed against what the target **environment** is
+  currently serving (`Deployments.active_deployment_for/3`); the studio deploy
+  flow gates a breaking promotion behind an explicit ack, attributing the break
+  to that environment ("breaks `@production`, currently v1"). This is the real
+  "breaks deployment X (prod)" guard — env aliases only change at deploy time,
+  not at publish. (Gap A.)
+- [x] **Compatibility surfacing in studio** — breaking-publish and breaking-deploy
+  gate modals list the contract reasons before the author proceeds.
+- [x] Diagnostics agree with the contract by construction — `Diagnostics` derives
+  its input-contract summary straight from `VersionDiff.contract/1`. The old
+  producer/consumer `undefined`/`unused` variable *warnings* were removed: they
+  encoded a closed-system model (Context/Memory nodes "define" values) that
+  contradicts the externalized-prompt model (every `{var}` is a runtime input the
+  caller supplies), so a well-formed graph lit up with false positives for its own
+  public API. They are replaced by a single informational `:input_contract` line
+  ("N runtime variables — R required, O optional") that mirrors the published
+  contract exactly.
+
+**Remaining (Gap C — deferred):** typed variable shapes. v1 treats every
+variable as a string; "where typed, the expected shape" needs a way for a node to
+*declare* a variable's type (a node-schema + studio UX change), so it is a
+feature, not a gap — nobody is blocked on it. Also outstanding: a per-request API
+access log (noted under P0) and test backfill for the runtime API controllers.
 
 ---
 
