@@ -1416,6 +1416,9 @@
 .diag-item--error {
   color: oklch(0.42 0.14 28);
 }
+.diag-item--info {
+  color: oklch(0.48 0.09 250);
+}
 .diag-item--clickable {
   cursor: pointer;
 }

@@ -55,6 +55,67 @@ defmodule Nspark.VersionDiffTest do
       assert %{"variables" => vars} = VersionDiff.contract(snapshot)
       assert vars == %{}
     end
+
+    test "a variable produced by an agent output_var is not a caller input" do
+      snapshot = %{
+        "nodes" => [
+          snode(id: "agent", type: "agent", metadata: %{"output_var" => "risk_score"}),
+          snode(id: "consumer", type: "constraint", content: "Escalate when {risk_score} is high, for {customer_name}.")
+        ]
+      }
+
+      assert %{"variables" => vars, "outputs" => outputs} = VersionDiff.contract(snapshot)
+
+      # risk_score is produced internally by the agent → not in the input contract,
+      # surfaced under outputs instead. customer_name remains a caller input.
+      refute Map.has_key?(vars, "risk_score")
+      assert vars["customer_name"] == %{"required" => true, "refs" => ["consumer"]}
+      assert outputs == ["risk_score"]
+    end
+  end
+
+  defp sedge(source, target, branch) do
+    %{
+      "id" => "#{source}-#{target}",
+      "source_node_id" => source,
+      "target_node_id" => target,
+      "edge_type" => "dependency",
+      "metadata" => %{"branch" => branch}
+    }
+  end
+
+  describe "contract/1 optional variables" do
+    test "a variable used only by a conditional-branch target is optional" do
+      snapshot = %{
+        "nodes" => [
+          snode(id: "cond", type: "conditional", content: "tier == premium"),
+          snode(id: "branch", type: "constraint", content: "Offer {discount_code}")
+        ],
+        "edges" => [sedge("cond", "branch", "yes")]
+      }
+
+      assert %{"variables" => %{"discount_code" => spec}} = VersionDiff.contract(snapshot)
+      assert spec == %{"required" => false, "refs" => ["branch"]}
+    end
+
+    test "a variable used by any unconditional node stays required" do
+      snapshot = %{
+        "nodes" => [
+          snode(id: "cond", type: "conditional", content: "x"),
+          snode(id: "branch", type: "constraint", content: "Use {shared}"),
+          snode(id: "always", type: "persona", content: "Greet using {shared}")
+        ],
+        "edges" => [sedge("cond", "branch", "yes")]
+      }
+
+      assert %{"variables" => %{"shared" => %{"required" => true}}} =
+               VersionDiff.contract(snapshot)
+    end
+
+    test "without edges every variable is required (safe default)" do
+      assert %{"variables" => %{"x" => %{"required" => true}}} =
+               VersionDiff.contract(%{"nodes" => [snode(id: "a", content: "{x}")]})
+    end
   end
 
   describe "contract/1 outputs" do
@@ -206,11 +267,62 @@ defmodule Nspark.VersionDiffTest do
 
       d = VersionDiff.diff(snapshot, snapshot)
       assert d["level"] == :cosmetic
-      assert d["variables"] == %{"added" => [], "removed" => [], "renamed" => []}
+
+      assert d["variables"] == %{
+               "added" => [],
+               "removed" => [],
+               "renamed" => [],
+               "tightened" => []
+             }
+
       assert d["outputs"] == %{"added" => [], "removed" => []}
       assert d["provider"] == nil
       assert d["nodes"] == []
       assert d["reasons"] == []
+    end
+
+    test "adding a new optional (conditional-branch-only) variable is compatible" do
+      old =
+        snap([
+          snode(id: "cond", type: "conditional", content: "x"),
+          snode(id: "b", type: "constraint", content: "static")
+        ])
+
+      new = %{
+        "nodes" => [
+          snode(id: "cond", type: "conditional", content: "x"),
+          snode(id: "b", type: "constraint", content: "Offer {promo}")
+        ],
+        "edges" => [sedge("cond", "b", "yes")]
+      }
+
+      d = VersionDiff.diff(old, new)
+      assert d["level"] == :compatible
+      assert d["variables"]["added"] == ["promo"]
+      assert "accepts new optional variable {promo}" in d["reasons"]
+    end
+
+    test "an optional variable becoming required (tightening) is breaking" do
+      old = %{
+        "nodes" => [
+          snode(id: "cond", type: "conditional", content: "x"),
+          snode(id: "b", type: "constraint", content: "Offer {promo}")
+        ],
+        "edges" => [sedge("cond", "b", "yes")]
+      }
+
+      # Same {promo}, now referenced by an unconditional node ⇒ required.
+      new =
+        snap([
+          snode(id: "cond", type: "conditional", content: "x"),
+          snode(id: "b", type: "constraint", content: "Offer {promo}"),
+          snode(id: "p", type: "persona", content: "Always mention {promo}")
+        ])
+
+      d = VersionDiff.diff(old, new)
+      assert d["level"] == :breaking
+      assert d["variables"]["tightened"] == ["promo"]
+      assert "variable {promo} is now always required" in d["reasons"]
     end
 
     test "removing a node that held a variable is compatible (contract delta wins)" do

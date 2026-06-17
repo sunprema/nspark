@@ -83,7 +83,8 @@ defmodule NsparkWeb.StudioLive do
      |> assign(:architect_error, nil)
      # version diff (semantic graph diff, plan Phase 4)
      |> assign(:version_diff, nil)
-     |> assign(:breaking_publish, nil)}
+     |> assign(:breaking_publish, nil)
+     |> assign(:breaking_deploy, nil)}
   end
 
   @impl true
@@ -783,7 +784,25 @@ defmodule NsparkWeb.StudioLive do
     {:noreply, assign(socket, architect_loading: false, architect_error: reason)}
   end
 
-  def handle_event("deploy", %{"environment" => env_str}, socket) do
+  def handle_event("deploy", %{"environment" => env_str}, socket),
+    do: run_deploy(socket, env_str, acknowledge_breaking: false)
+
+  def handle_event("cancel_breaking_deploy", _params, socket) do
+    {:noreply, assign(socket, :breaking_deploy, nil)}
+  end
+
+  def handle_event("confirm_breaking_deploy", _params, socket) do
+    case socket.assigns.breaking_deploy do
+      %{env: env_str} -> run_deploy(socket, env_str, acknowledge_breaking: true)
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # Deploy the latest published version to `env_str`. Unless acknowledged, a
+  # change that breaks what the environment is *currently serving* opens the
+  # breaking-deploy gate (attributing the break to that live deployment) instead
+  # of deploying. Publishing already guards `@latest`; this guards env aliases.
+  defp run_deploy(socket, env_str, opts) do
     case socket.assigns.graph_versions do
       [] ->
         {:noreply, put_flash(socket, :error, "Publish a version before deploying.")}
@@ -796,28 +815,48 @@ defmodule NsparkWeb.StudioLive do
             _ -> :dev
           end
 
-        attrs = %{
-          environment: env,
-          project_id: socket.assigns.graph.project_id,
-          graph_version_id: latest.id,
-          deployed_version: latest.version_number
-        }
+        ash = ash_opts(socket)
+        acknowledged? = Keyword.get(opts, :acknowledge_breaking, false)
+        impact = Nspark.Architecture.deploy_impact(latest, env, ash)
 
-        opts = ash_opts(socket)
-
-        case Nspark.Deployments.deploy_version(attrs, opts) do
-          {:ok, dep} ->
+        case impact do
+          %{level: :breaking} when not acknowledged? ->
             {:noreply,
-             socket
-             |> assign(:show_deploy_modal, false)
-             |> put_flash(
-               :info,
-               "Deployed v#{dep.deployed_version} to #{dep.environment} · endpoint: #{dep.endpoint_slug}"
-             )}
+             assign(socket, :breaking_deploy, %{
+               env: env_str,
+               environment: env,
+               current_version: impact.current_version,
+               target_version: latest.version_number,
+               diff: normalize_diff(impact.diff)
+             })}
 
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Deploy failed: #{inspect(reason)}")}
+          _ ->
+            do_deploy(socket, env, latest, ash)
         end
+    end
+  end
+
+  defp do_deploy(socket, env, version, ash) do
+    attrs = %{
+      environment: env,
+      project_id: socket.assigns.graph.project_id,
+      graph_version_id: version.id,
+      deployed_version: version.version_number
+    }
+
+    case Nspark.Deployments.deploy_version(attrs, ash) do
+      {:ok, dep} ->
+        {:noreply,
+         socket
+         |> assign(:show_deploy_modal, false)
+         |> assign(:breaking_deploy, nil)
+         |> put_flash(
+           :info,
+           "Deployed v#{dep.deployed_version} to #{dep.environment} · endpoint: #{dep.endpoint_slug}"
+         )}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Deploy failed: #{inspect(reason)}")}
     end
   end
 
@@ -913,7 +952,8 @@ defmodule NsparkWeb.StudioLive do
       "variables" => %{
         "added" => get_in(diff, ["variables", "added"]) || [],
         "removed" => get_in(diff, ["variables", "removed"]) || [],
-        "renamed" => get_in(diff, ["variables", "renamed"]) || []
+        "renamed" => get_in(diff, ["variables", "renamed"]) || [],
+        "tightened" => get_in(diff, ["variables", "tightened"]) || []
       },
       "outputs" => %{
         "added" => get_in(diff, ["outputs", "added"]) || [],
@@ -1175,6 +1215,10 @@ defmodule NsparkWeb.StudioLive do
     end
     {level, errors, warnings}
   end
+
+  defp diag_icon(:error), do: "✕"
+  defp diag_icon(:info), do: "ℹ"
+  defp diag_icon(_), do: "⚠"
 
   defp diag_bar_label(:ok, _e, _w), do: "✓ Ready"
   defp diag_bar_label(:warning, _e, w), do: "⚠ #{w} warning#{if w > 1, do: "s"}"
@@ -2019,12 +2063,13 @@ defmodule NsparkWeb.StudioLive do
                   class={["diag-item",
                     d.level == :error && "diag-item--error",
                     d.level == :warning && "diag-item--warn",
+                    d.level == :info && "diag-item--info",
                     d.node_ids != [] && "diag-item--clickable"
                   ]}
                   phx-click={d.node_ids != [] && "select_node"}
                   phx-value-id={List.first(d.node_ids)}
                 >
-                  <span class="diag-icon">{if d.level == :error, do: "✕", else: "⚠"}</span>
+                  <span class="diag-icon">{diag_icon(d.level)}</span>
                   <span class="diag-msg">{d.message}</span>
                 </div>
               </div>
@@ -2466,6 +2511,36 @@ defmodule NsparkWeb.StudioLive do
                 </button>
               </div>
             </.form>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Deploy-time breaking-change gate: this change breaks what the target
+            environment is currently serving (Gap A). --%>
+      <%= if @breaking_deploy do %>
+        <div class="dlg-overlay">
+          <div class="dlg-backdrop" phx-click="cancel_breaking_deploy"></div>
+          <div class="dlg-box dlg-box--wide">
+            <div class="dlg-head">
+              <span class="vbadge vbadge--breaking">⚠ breaking</span> DEPLOY BREAKING CHANGE
+            </div>
+            <div class="dlg-sub">
+              Deploying v{@breaking_deploy.target_version} to
+              <strong>{@breaking_deploy.environment}</strong> breaks the contract that
+              environment currently serves (v{@breaking_deploy.current_version}). Apps
+              calling <code>@{@breaking_deploy.environment}</code> will be affected.
+            </div>
+            <div class="vdiff-reasons">
+              <div :for={r <- @breaking_deploy.diff["reasons"]} class="vdiff-reason">{r}</div>
+            </div>
+            <div class="dlg-actions">
+              <button type="button" phx-click="cancel_breaking_deploy" class="dlg-btn dlg-btn--cancel">
+                Cancel
+              </button>
+              <button type="button" phx-click="confirm_breaking_deploy" class="dlg-btn dlg-btn--create">
+                Deploy anyway
+              </button>
+            </div>
           </div>
         </div>
       <% end %>

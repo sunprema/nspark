@@ -7,7 +7,7 @@ defmodule Nspark.Diagnostics do
   See docs/PRD.md "Compiler Diagnostics" and UX §9.
   """
 
-  @type level :: :error | :warning
+  @type level :: :error | :warning | :info
   @type t :: %{
           level: level(),
           code: atom(),
@@ -19,7 +19,8 @@ defmodule Nspark.Diagnostics do
   Run all checks against the current graph. Only active (non-muted) nodes
   are checked; edges reference the full set.
 
-  Returns a list of `t()` maps, errors before warnings.
+  Returns a list of `t()` maps: errors and warnings (structural problems)
+  first, then a closing informational summary of the input contract.
   """
   @spec run([map()], [map()]) :: [t()]
   def run(nodes, edges) do
@@ -33,9 +34,8 @@ defmodule Nspark.Diagnostics do
     |> check_no_output(active)
     |> check_empty_output(active)
     |> check_multiple_outputs(active)
-    |> check_undefined_variables(active)
-    |> check_unused_variables(active)
     |> check_agent_nodes(active)
+    |> check_input_contract(active, edges)
     |> Enum.reverse()
   end
 
@@ -137,9 +137,6 @@ defmodule Nspark.Diagnostics do
       ]
   end
 
-  @provider_types [:context, :memory]
-  @consumer_types [:persona, :constraint, :skill, :tool, :evaluation, :conditional, :output, :agent]
-
   defp check_empty_output(diags, nodes) do
     empty =
       nodes
@@ -190,59 +187,48 @@ defmodule Nspark.Diagnostics do
     end
   end
 
-  defp check_undefined_variables(diags, nodes) do
-    providers = Enum.filter(nodes, &(node_type(&1) in @provider_types))
-    consumers = Enum.filter(nodes, &(node_type(&1) in @consumer_types))
-    agent_nodes = Enum.filter(nodes, &(node_type(&1) == :agent))
+  # Every `{var}` in a prompt graph is a *runtime input* the calling app supplies
+  # — a Context/Memory node is a template section that references inputs, not a
+  # definition that binds their values. So there is no such thing as an
+  # "undefined" or "unused" variable to warn about; that producer/consumer view
+  # contradicts the published input contract (a well-formed externalized prompt
+  # would otherwise light up with false-positive warnings for its entire API).
+  #
+  # Instead we surface the contract itself, derived from the SAME source the
+  # publish path uses (`Nspark.VersionDiff.contract/1`), so the diagnostics panel
+  # and the frozen contract can never disagree about what the graph requires.
+  defp check_input_contract(diags, nodes, edges) do
+    vars = Nspark.VersionDiff.contract(%{nodes: nodes, edges: edges})["variables"]
 
-    provided =
-      vars_in(providers)
-      |> Kernel.++(agent_output_vars(agent_nodes))
-      |> MapSet.new()
+    case map_size(vars) do
+      0 ->
+        diags
 
-    undefined =
-      consumers
-      |> Enum.flat_map(fn n -> Enum.map(vars_in_node(n), &{&1, node_id(n)}) end)
-      |> Enum.group_by(fn {var, _} -> var end, fn {_, id} -> id end)
-      |> Enum.reject(fn {var, _ids} -> MapSet.member?(provided, var) end)
-      |> Enum.map(fn {var, ids} ->
-        %{
-          level: :warning,
-          code: :undefined_variable,
-          message: "{#{var}} is used but not defined in any Context, Memory, or Agent output.",
-          node_ids: Enum.uniq(ids)
-        }
-      end)
+      total ->
+        optional = Enum.count(vars, fn {_name, spec} -> Map.get(spec, "required") == false end)
 
-    undefined ++ diags
+        [
+          %{
+            level: :info,
+            code: :input_contract,
+            message: input_contract_message(total, total - optional, optional),
+            node_ids: []
+          }
+          | diags
+        ]
+    end
   end
 
-  defp check_unused_variables(diags, nodes) do
-    providers = Enum.filter(nodes, &(node_type(&1) in @provider_types))
-    consumers = Enum.filter(nodes, &(node_type(&1) in @consumer_types))
+  defp input_contract_message(total, _required, 0),
+    do: "Input contract: #{total} runtime variable#{plural(total)}, all required, supplied by the calling app."
 
-    used_by_consumers = MapSet.new(vars_in(consumers))
+  defp input_contract_message(total, required, optional),
+    do:
+      "Input contract: #{total} runtime variable#{plural(total)} — #{required} required, " <>
+        "#{optional} optional (reached only on conditional branches) — supplied by the calling app."
 
-    unused =
-      providers
-      |> Enum.flat_map(fn n ->
-        n
-        |> vars_in_node()
-        |> Enum.reject(&MapSet.member?(used_by_consumers, &1))
-        |> Enum.map(&{&1, node_id(n)})
-      end)
-      |> Enum.group_by(fn {var, _} -> var end, fn {_, id} -> id end)
-      |> Enum.map(fn {var, ids} ->
-        %{
-          level: :warning,
-          code: :unused_variable,
-          message: "{#{var}} is defined but not referenced in any other node.",
-          node_ids: Enum.uniq(ids)
-        }
-      end)
-
-    unused ++ diags
-  end
+  defp plural(1), do: ""
+  defp plural(_), do: "s"
 
   defp check_agent_nodes(diags, nodes) do
     agent_nodes = Enum.filter(nodes, &(node_type(&1) == :agent))
@@ -267,13 +253,7 @@ defmodule Nspark.Diagnostics do
     end)
   end
 
-  # ── variable extraction ───────────────────────────────────────────────────────
-
-  defp vars_in(nodes), do: Enum.flat_map(nodes, &vars_in_node/1)
-
-  # Delegates to the single canonical variable definition so this check and the
-  # published input contract can never disagree on what counts as a variable.
-  defp vars_in_node(node), do: node |> node_content() |> Nspark.VersionDiff.variables_in()
+  # ── content / metadata / label accessors ──────────────────────────────────────
 
   defp node_content(%{content: c}), do: c
   defp node_content(%{"content" => c}), do: c
@@ -286,15 +266,6 @@ defmodule Nspark.Diagnostics do
   defp node_label(%{label: l}), do: l
   defp node_label(%{"label" => l}), do: l
   defp node_label(_), do: "?"
-
-  defp agent_output_vars(agent_nodes) do
-    Enum.flat_map(agent_nodes, fn n ->
-      case node_metadata(n) do
-        %{"output_var" => v} when is_binary(v) and v != "" -> [v]
-        _ -> []
-      end
-    end)
-  end
 
   # ── cycle detection via Kahn's algorithm ─────────────────────────────────────
   # Nodes absent from the topological sort are in cycles.

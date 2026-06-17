@@ -186,12 +186,11 @@
     padding: 0 10px 9px;
     font: 400 10.5px/1.55 "IBM Plex Mono", monospace;
     color: oklch(0.48 0.02 255);
+    /* Grow to fit the full content rather than clamping to a fixed height.
+       pre-wrap preserves authored newlines; break-word keeps long tokens
+       (e.g. {variable} names) inside the fixed 280px width. */
     white-space: pre-wrap;
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    -webkit-box-orient: vertical;
+    overflow-wrap: break-word;
     border-top: 1px solid oklch(0.93 0.006 250);
     margin-top: 0;
   }

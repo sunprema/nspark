@@ -69,6 +69,14 @@ Design agent behavior on an interactive canvas. Each node represents a discrete 
 
 Both branch nodes are standard blueprint nodes — the diamond shape and the `no`/`yes` edge labels are all that distinguish a conditional from any other connection in the graph.
 
+### Real-World Example — Refund & Dispute Agent
+
+A regulated-fintech support agent, decomposed from a single sprawling system prompt into a structured graph. Runtime context and memory feed in along the top; the spine runs persona → compliance guardrails → fraud-risk gate → tools → self-check → output schema, with the fraud path branching off to an escalation node.
+
+![Refund & Dispute Agent — context and memory providers feeding a persona → constraints → conditional → tools → evaluation → output spine, with a conditional escalation branch](docs/screenshots/refund-agent.png)
+
+This single graph compiles back into a sectioned, model-ready prompt and publishes a typed input contract of **16 variables** — of which the three reached only on the escalation branch (`escalation_queue`, `fraud_signals`, `sla_hours`) are automatically marked **optional**, while the rest are required. A calling app validates its inputs against that contract before the prompt is ever used. The source prompt and decomposition are in [`REFUND_AGENT_PROMPT.md`](REFUND_AGENT_PROMPT.md); reproduce the graph with `mix run priv/repo/refund_agent_seed.exs`.
+
 ### Compiler
 
 The graph is compiled into model-ready instructions on every change. The pipeline:
