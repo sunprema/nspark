@@ -101,14 +101,16 @@ contract around it.
   `last_used_at` columns. (A per-request access log is still future work.)
 - [ ] **Caching + delivery** — strong ETag / `Cache-Control`, immutable pinned
   versions are infinitely cacheable; document a CDN-frontable contract.
-- [x] **Client SDK** (Python `clients/python/` + TypeScript `clients/typescript/`)
-  — `Client` fetches by pinned version, caches locally (immutable pinned versions
-  cached forever; moving aliases revalidated via `If-None-Match`/304), **falls
-  back to last-known-good on our outage** (in-memory by default, durable via
-  `FileCache`), and validates injected variables against the published input
-  contract before substituting (`Prompt.render`). Honors `429`/`retry-after`
-  with retries+backoff. 19 tests each (Python `responses`-mocked; TS vitest with
-  a fetch stub). The TS client runs on Node 18+ and any `fetch`-capable runtime.
+- [x] **Client SDK** (Python `clients/python/`, TypeScript `clients/typescript/`,
+  Elixir `clients/elixir/`) — `Client` fetches by pinned version, caches locally
+  (immutable pinned versions cached forever; moving aliases revalidated via
+  `If-None-Match`/304), **falls back to last-known-good on our outage**
+  (in-memory by default, durable via a file-backed cache), and validates
+  injected variables against the published input contract before substituting
+  (`Prompt.render`). Honors `429`/`retry-after` with retries+backoff. ~19 tests
+  each (Python `responses`; TS vitest + fetch stub; Elixir ExUnit + injected
+  request fn). TS runs on Node 18+/any `fetch` runtime; Elixir uses Req with a
+  `Nspark.Cache` protocol for pluggable backing stores.
 - [x] **Rate limiting** on `/api/v1/*` (per key / per org). Dependency-free ETS
   fixed-window limiter (`Nspark.RateLimiter`, supervised, atomic `update_counter`
   + periodic sweep) behind the `NsparkWeb.RateLimit` plug on both API pipelines.
