@@ -111,6 +111,83 @@ defmodule NsparkWeb.Api.PromptControllerTest do
     end
   end
 
+  describe "listing" do
+    test "lists resolvable prompts with their latest version", %{conn: conn} do
+      body = conn |> get("/api/v1/prompts") |> json_response(200)
+
+      assert body["scope"] == %{"environment" => nil, "project_scoped" => false}
+      assert [prompt] = body["prompts"]
+      assert prompt["slug"] == "support-agent"
+      assert prompt["name"] == "Support Agent"
+      assert prompt["version"] == 2
+      assert prompt["resolved_via"] == "latest"
+    end
+
+    test "omits graphs that have no published version", %{conn: conn, project: project} do
+      Ash.create!(Graph, %{name: "Draft Only", project_id: project.id},
+        tenant: project.organization_id,
+        authorize?: false
+      )
+
+      slugs = conn |> get("/api/v1/prompts") |> json_response(200) |> Map.fetch!("prompts")
+      assert Enum.map(slugs, & &1["slug"]) == ["support-agent"]
+    end
+
+    test "an org-scoped key lists the org's prompts and is uncacheable", %{org: org, user: user} do
+      conn = key_conn(issue(org, user, %{name: "k"})) |> get("/api/v1/prompts")
+      assert [%{"slug" => "support-agent"}] = json_response(conn, 200)["prompts"]
+      assert get_resp_header(conn, "cache-control") == ["no-store"]
+    end
+
+    test "a project-scoped key lists only its project's prompts", %{
+      org: org,
+      user: user,
+      project: project
+    } do
+      in_scope = issue(org, user, %{name: "in", project_id: project.id})
+      body = key_conn(in_scope) |> get("/api/v1/prompts") |> json_response(200)
+      assert body["scope"]["project_scoped"] == true
+      assert [%{"slug" => "support-agent"}] = body["prompts"]
+
+      other =
+        Ash.create!(Project, %{name: "Other", status: :active}, tenant: org.id, authorize?: false)
+
+      out_scope = issue(org, user, %{name: "out", project_id: other.id})
+      assert key_conn(out_scope) |> get("/api/v1/prompts") |> json_response(200) |> Map.fetch!("prompts") == []
+    end
+
+    test "an environment-scoped key lists only what's live there", %{
+      org: org,
+      user: user,
+      project: project,
+      v2: v2
+    } do
+      Nspark.Deployments.deploy_version(
+        %{
+          environment: :production,
+          project_id: project.id,
+          graph_version_id: v2.id,
+          deployed_version: v2.version_number
+        },
+        tenant: org.id,
+        actor: user
+      )
+
+      prod = issue(org, user, %{name: "prod", environment: :production})
+      body = key_conn(prod) |> get("/api/v1/prompts") |> json_response(200)
+
+      assert body["scope"]["environment"] == "production"
+      assert [%{"slug" => "support-agent", "resolved_via" => "environment:production"}] = body["prompts"]
+
+      staging = issue(org, user, %{name: "staging", environment: :staging})
+      assert key_conn(staging) |> get("/api/v1/prompts") |> json_response(200) |> Map.fetch!("prompts") == []
+    end
+
+    test "401 without any credential", %{} do
+      assert json_response(get(build_conn(), "/api/v1/prompts"), 401)["error"] == "unauthorized"
+    end
+  end
+
   describe "caching" do
     test "honours If-None-Match with a 304", %{conn: conn, graph: graph} do
       first = get(conn, "/api/v1/prompts/#{graph.slug}?version=1")

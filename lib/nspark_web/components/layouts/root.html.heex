@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <.live_title default="Nspark" suffix=" · Phoenix Framework" phx-no-format>{assigns[:page_title]}</.live_title>
+    <.live_title default="Nspark" phx-no-format>{assigns[:page_title]}</.live_title>
     <PhoenixVite.Components.assets
       names={["js/app.js", "css/app.css"]}
       manifest={{:nspark, "priv/static/.vite/manifest.json"}}
