@@ -101,9 +101,14 @@ contract around it.
   `last_used_at` columns. (A per-request access log is still future work.)
 - [ ] **Caching + delivery** — strong ETag / `Cache-Control`, immutable pinned
   versions are infinitely cacheable; document a CDN-frontable contract.
-- [ ] **Client SDK** (start with one language) — fetches by pinned version,
-  caches locally, **falls back to last-known-good on our outage**, validates
-  injected variables against the published schema before substituting.
+- [x] **Client SDK** (Python `clients/python/` + TypeScript `clients/typescript/`)
+  — `Client` fetches by pinned version, caches locally (immutable pinned versions
+  cached forever; moving aliases revalidated via `If-None-Match`/304), **falls
+  back to last-known-good on our outage** (in-memory by default, durable via
+  `FileCache`), and validates injected variables against the published input
+  contract before substituting (`Prompt.render`). Honors `429`/`retry-after`
+  with retries+backoff. 19 tests each (Python `responses`-mocked; TS vitest with
+  a fetch stub). The TS client runs on Node 18+ and any `fetch`-capable runtime.
 - [x] **Rate limiting** on `/api/v1/*` (per key / per org). Dependency-free ETS
   fixed-window limiter (`Nspark.RateLimiter`, supervised, atomic `update_counter`
   + periodic sweep) behind the `NsparkWeb.RateLimit` plug on both API pipelines.
