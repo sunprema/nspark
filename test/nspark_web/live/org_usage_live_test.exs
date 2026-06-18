@@ -59,6 +59,39 @@ defmodule NsparkWeb.OrgUsageLiveTest do
     assert html =~ "100%"
   end
 
+  test "all-time stats aggregate across success and error events", %{conn: conn} do
+    %{conn: conn, org: org} = setup_user(conn, :viewer)
+
+    Nspark.Observability.record(%{
+      source: :prompt_fetch,
+      organization_id: org.id,
+      status: :ok,
+      http_status: 200,
+      latency_ms: 40
+    })
+
+    Nspark.Observability.record(%{
+      source: :deployment_run,
+      organization_id: org.id,
+      status: :error,
+      http_status: 404,
+      error_reason: "prompt_not_found",
+      latency_ms: 60
+    })
+
+    wait_for(fn ->
+      2 == length(Nspark.Observability.recent_run_events!(nil, tenant: org.id, authorize?: false))
+    end)
+
+    {:ok, view, _} = live(conn, "/org/usage")
+    html = render(view)
+
+    assert html =~ "ALL-TIME"
+    # 1 of 2 succeeded → 50%; mean latency (40 + 60) / 2 → 50ms.
+    assert html =~ "50%"
+    assert html =~ "50ms"
+  end
+
   defp wait_for(fun, attempts \\ 50)
   defp wait_for(_fun, 0), do: flunk("condition not met in time")
 
