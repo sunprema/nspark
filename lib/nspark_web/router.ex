@@ -52,6 +52,7 @@ defmodule NsparkWeb.Router do
       live "/studio/:graph_id", StudioLive
       live "/org/members", OrgMembersLive
       live "/org/api-keys", OrgApiKeysLive
+      live "/org/usage", OrgUsageLive
     end
   end
 

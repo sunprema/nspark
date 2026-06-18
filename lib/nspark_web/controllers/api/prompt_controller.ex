@@ -71,12 +71,15 @@ defmodule NsparkWeb.Api.PromptController do
   def show(conn, %{"slug" => slug} = params) do
     api_key = conn.assigns[:api_key]
     user = conn.assigns[:current_user]
+    started = System.monotonic_time(:millisecond)
 
     cond do
       api_key ->
         with {:ok, qualifier} <- parse_qualifier(params),
              :ok <- enforce_key_scope(api_key, qualifier) do
-          render_result(conn, resolve_with_key(api_key, slug, qualifier))
+          result = resolve_with_key(api_key, slug, qualifier)
+          record_fetch(result, started, key_principal(api_key))
+          render_result(conn, result)
         else
           {:error, :environment_forbidden} ->
             error(conn, 403, "api key is not scoped to that environment")
@@ -87,13 +90,61 @@ defmodule NsparkWeb.Api.PromptController do
 
       user ->
         case parse_qualifier(params) do
-          {:ok, qualifier} -> render_result(conn, resolve_across_tenants(user, slug, qualifier))
-          {:error, msg} -> error(conn, 400, msg)
+          {:ok, qualifier} ->
+            result = resolve_across_tenants(user, slug, qualifier)
+            record_fetch(result, started, %{type: :user})
+            render_result(conn, result)
+
+          {:error, msg} ->
+            error(conn, 400, msg)
         end
 
       true ->
         error(conn, 401, "unauthorized")
     end
+  end
+
+  # ── observability ────────────────────────────────────────────────────────────
+
+  defp key_principal(api_key),
+    do: %{type: :api_key, api_key_id: api_key.id, organization_id: api_key.organization_id}
+
+  # Fire-and-forget RunEvent for a prompt fetch. On success the tenant comes from
+  # the resolved graph; on a cross-tenant miss (user path) there is no org to
+  # attribute the event to, so `record/1` no-ops.
+  defp record_fetch(result, started, principal) do
+    latency = System.monotonic_time(:millisecond) - started
+
+    base = %{
+      source: :prompt_fetch,
+      latency_ms: latency,
+      principal_type: principal.type,
+      api_key_id: Map.get(principal, :api_key_id)
+    }
+
+    attrs =
+      case result do
+        {:ok, %{graph: graph, version: version, resolved_via: via, compiled: compiled}} ->
+          Map.merge(base, %{
+            organization_id: graph.organization_id,
+            status: :ok,
+            http_status: 200,
+            resolved_via: via,
+            token_estimate: compiled[:token_estimate],
+            graph_id: graph.id,
+            graph_version_id: version.id
+          })
+
+        {:error, reason} ->
+          Map.merge(base, %{
+            organization_id: Map.get(principal, :organization_id),
+            status: :error,
+            http_status: 404,
+            error_reason: to_string(reason)
+          })
+      end
+
+    Nspark.Observability.record(attrs)
   end
 
   defp render_result(conn, result) do

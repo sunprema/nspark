@@ -1627,6 +1627,7 @@ defmodule NsparkWeb.StudioLive do
           </details>
           <a href={~p"/org/members"} class="studio-btn" style="text-decoration: none;">Members</a>
           <a href={~p"/org/api-keys"} class="studio-btn" style="text-decoration: none;">API Keys</a>
+          <a href={~p"/org/usage"} class="studio-btn" style="text-decoration: none;">Usage</a>
           <button type="button" phx-click="open_new_graph_modal" class="studio-btn studio-btn--new">
             + New Agent
           </button>
