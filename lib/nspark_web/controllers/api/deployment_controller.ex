@@ -18,6 +18,7 @@ defmodule NsparkWeb.Api.DeploymentController do
   def run(conn, %{"deployment_id" => dep_id} = params) do
     user = conn.assigns[:current_user]
     variables = Map.get(params, "variables", %{})
+    started = System.monotonic_time(:millisecond)
 
     if is_nil(user) do
       conn |> put_status(401) |> json(%{error: "unauthorized"})
@@ -40,6 +41,8 @@ defmodule NsparkWeb.Api.DeploymentController do
 
             case Nspark.Orchestrator.run(compiled.markdown, variables, tenant: org_id) do
               {:ok, %{prompt: prompt, sub_agent_calls: calls}} ->
+                record_run(dep, org_id, variables, compiled, started, :ok, nil)
+
                 json(conn, %{
                   deployment_id: dep.id,
                   environment: dep.environment,
@@ -56,6 +59,8 @@ defmodule NsparkWeb.Api.DeploymentController do
                 })
 
               {:error, %{reason: reason, sub_agent_calls: calls}} ->
+                record_run(dep, org_id, variables, compiled, started, :error, to_string(reason))
+
                 conn
                 |> put_status(422)
                 |> json(%{error: reason, sub_agent_calls: calls})
@@ -63,6 +68,25 @@ defmodule NsparkWeb.Api.DeploymentController do
           end
       end
     end
+  end
+
+  # Fire-and-forget RunEvent for a deployment run. Captures variable *names* only
+  # (values may carry customer data — see Nspark.Observability.RunEvent).
+  defp record_run(dep, org_id, variables, compiled, started, status, error_reason) do
+    Nspark.Observability.record(%{
+      source: :deployment_run,
+      organization_id: org_id,
+      principal_type: :user,
+      status: status,
+      http_status: if(status == :ok, do: 200, else: 422),
+      error_reason: error_reason,
+      latency_ms: System.monotonic_time(:millisecond) - started,
+      token_estimate: compiled.token_estimate,
+      variable_keys: Map.keys(variables),
+      deployment_id: dep.id,
+      graph_id: dep.graph_version.graph_id,
+      graph_version_id: dep.graph_version.id
+    })
   end
 
   defp find_with_tenant(resource, id, user) do

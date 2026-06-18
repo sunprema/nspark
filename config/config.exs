@@ -94,7 +94,14 @@ config :spark,
 config :nspark,
   ecto_repos: [Nspark.Repo],
   generators: [timestamp_type: :utc_datetime],
-  ash_domains: [Nspark.Accounts, Nspark.Projects, Nspark.Architecture, Nspark.Registry, Nspark.Deployments],
+  ash_domains: [
+    Nspark.Accounts,
+    Nspark.Projects,
+    Nspark.Architecture,
+    Nspark.Registry,
+    Nspark.Deployments,
+    Nspark.Observability
+  ],
   ash_authentication: [return_error_on_invalid_magic_link_token?: true]
 
 # Configure the endpoint
