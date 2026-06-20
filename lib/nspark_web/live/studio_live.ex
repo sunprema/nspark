@@ -220,6 +220,23 @@ defmodule NsparkWeb.StudioLive do
     end
   end
 
+  # Auto-layout: tidy the control-layer graph so its structure reads cleanly —
+  # states in a column, each state's rules stacked beside it by priority, the
+  # fallback at the bottom, and memory/tool declarations off to the right.
+  def handle_event("relayout", _params, socket) do
+    opts = ash_opts(socket)
+    positions = auto_layout_positions(socket.assigns.nodes)
+
+    Enum.each(socket.assigns.nodes, fn n ->
+      with pos when not is_nil(pos) <- positions[n.id],
+           true <- (n.metadata || %{})["position"] != pos do
+        Ash.update!(n, %{metadata: Map.put(n.metadata || %{}, "position", pos)}, opts)
+      end
+    end)
+
+    {:noreply, socket |> refresh() |> mark_dirty()}
+  end
+
   # ── connect → create edge ────────────────────────────────────────────────────
 
   def handle_event("connect_nodes", %{"source" => s, "target" => t} = params, socket)
@@ -1914,6 +1931,94 @@ defmodule NsparkWeb.StudioLive do
       []
     end
   end
+
+  # ── auto-layout ───────────────────────────────────────────────────────────────
+
+  @layout_state_x 40
+  @layout_rule_x 380
+  @layout_decl_x 860
+  @layout_row 160
+  @layout_decl_row 110
+  @layout_group_gap 56
+  @layout_top 40
+
+  # Compute tidy `%{node_id => %{"x", "y"}}` positions for a control-layer graph:
+  # rules grouped by their guarding state and stacked by priority (top wins), each
+  # state node centered beside its block, the [OTHERWISE] fallback last, and
+  # memory/tool declarations in a column on the right. Returns %{} otherwise.
+  defp auto_layout_positions(nodes) do
+    if Enum.any?(nodes, &(&1.type in [:rule, :state])) do
+      ir = Nspark.PromptBasic.Compiler.from_graph(nodes)
+      rule_node = Nspark.PromptBasic.Compiler.rule_id_to_node_id(nodes)
+      state_node = nodes |> Enum.filter(&(&1.type == :state)) |> Map.new(&{&1.label, &1.id})
+
+      {otherwise, active} = Enum.split_with(ir.rules, &(&1.priority == :otherwise))
+      by_state = Enum.group_by(active, &rule_guard_state/1)
+
+      # Group order: global (unguarded) rules, then each state with its rules, then fallback.
+      groups =
+        [{nil, Map.get(by_state, nil, [])}] ++
+          Enum.map(Nspark.PromptBasic.IR.states(ir), fn s -> {s, Map.get(by_state, s, [])} end) ++
+          [{:fallback, otherwise}]
+
+      {positions, _y} =
+        Enum.reduce(groups, {%{}, @layout_top}, fn {key, rules}, {acc, y} ->
+          rules = Enum.sort_by(rules, &(-layout_priority(&1.priority)))
+          place_group(key, rules, rule_node, state_node, acc, y)
+        end)
+
+      layout_declarations(nodes, positions)
+    else
+      %{}
+    end
+  end
+
+  # Place one group's rules in the rule column; for a real state, center its node
+  # in the state column beside the block. Returns {positions, next_y}.
+  defp place_group(_key, [], _rule_node, _state_node, acc, y), do: {acc, y}
+
+  defp place_group(key, rules, rule_node, state_node, acc, y) do
+    {acc, bottom} =
+      Enum.reduce(rules, {acc, y}, fn r, {a, ry} ->
+        case rule_node[r.id] do
+          nil -> {a, ry}
+          nid -> {Map.put(a, nid, %{"x" => @layout_rule_x, "y" => ry}), ry + @layout_row}
+        end
+      end)
+
+    acc =
+      case key do
+        s when is_binary(s) ->
+          mid = round((y + (bottom - @layout_row)) / 2)
+
+          case state_node[s] do
+            nil -> acc
+            sid -> Map.put(acc, sid, %{"x" => @layout_state_x, "y" => mid})
+          end
+
+        _ ->
+          acc
+      end
+
+    {acc, bottom + @layout_group_gap}
+  end
+
+  # Stack memory/tool declaration nodes in a column on the right.
+  defp layout_declarations(nodes, positions) do
+    nodes
+    |> Enum.filter(&(&1.type in [:memory, :tool]))
+    |> Enum.with_index()
+    |> Enum.reduce(positions, fn {n, i}, acc ->
+      Map.put(acc, n.id, %{"x" => @layout_decl_x, "y" => @layout_top + i * @layout_decl_row})
+    end)
+  end
+
+  defp rule_guard_state(rule) do
+    Enum.find_value(rule.atoms, fn a -> if a.key == "state" and a.op == "=", do: a.value end)
+  end
+
+  defp layout_priority(:otherwise), do: -1
+  defp layout_priority(n) when is_integer(n), do: n
 
   # Phoenix sends an unchecked checkbox by omitting it; we pair each checkbox with a
   # hidden `value="false"`, so a present "true"/"false" string is authoritative.

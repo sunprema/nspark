@@ -1,6 +1,6 @@
 <script>
   import { onMount } from "svelte";
-  import { SvelteFlow, Background, Controls, MiniMap, ConnectionMode } from "@xyflow/svelte";
+  import { SvelteFlow, Background, Controls, ControlButton, MiniMap, ConnectionMode } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
   import BlueprintNode from "./BlueprintNode.svelte";
   import ConditionalNode from "./ConditionalNode.svelte";
@@ -161,7 +161,20 @@
       }}
     />
     <Background gap={22} bgColor="oklch(0.975 0.005 245)" patternColor="oklch(0.9 0.012 250)" />
-    <Controls showFitView showZoom />
+    <Controls showFitView showZoom>
+      <ControlButton
+        onclick={() => live?.pushEvent("relayout", {})}
+        title="Auto-layout — tidy nodes so the structure & connections read cleanly"
+        aria-label="Auto-layout"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+          <rect x="11" y="1" width="10" height="8" rx="1" />
+          <rect x="1" y="23" width="10" height="8" rx="1" />
+          <rect x="21" y="23" width="10" height="8" rx="1" />
+          <path d="M15 9h2v6h-2zM6 23v-4a1 1 0 011-1h18a1 1 0 011 1v4h-2v-3H8v3z" />
+        </svg>
+      </ControlButton>
+    </Controls>
     <MiniMap pannable zoomable />
   </SvelteFlow>
 </div>
