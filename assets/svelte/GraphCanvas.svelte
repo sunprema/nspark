@@ -5,11 +5,22 @@
   import BlueprintNode from "./BlueprintNode.svelte";
   import ConditionalNode from "./ConditionalNode.svelte";
   import AgentNode from "./AgentNode.svelte";
+  import RuleNode from "./RuleNode.svelte";
+  import StateNode from "./StateNode.svelte";
   import FlowBridge from "./FlowBridge.svelte";
 
-  let { nodes: initialNodes = [], edges: initialEdges = [], live } = $props();
+  let { nodes: initialNodes = [], edges: initialEdges = [], mode = null, live } = $props();
 
-  const nodeTypes = { blueprint: BlueprintNode, conditional: ConditionalNode, agent: AgentNode };
+  const nodeTypes = {
+    blueprint: BlueprintNode,
+    conditional: ConditionalNode,
+    agent: AgentNode,
+    rule: RuleNode,
+    state: StateNode,
+  };
+
+  // Mode-aware (memo §4): :flat → priority ladder, :stateful → state machine.
+  const stateCount = $derived(mode?.states ?? 0);
 
   let nodes = $state.raw($state.snapshot(initialNodes));
   let edges = $state.raw($state.snapshot(initialEdges));
@@ -120,6 +131,15 @@
 </script>
 
 <div class="bp-canvas" bind:this={canvasEl}>
+  {#if mode?.kind}
+    <div class="mode-badge" class:stateful={mode.kind === "stateful"}>
+      {#if mode.kind === "stateful"}
+        <span class="mode-dot"></span> STATE MACHINE · {stateCount} states
+      {:else}
+        <span class="mode-dot"></span> PRIORITY LADDER · flat
+      {/if}
+    </div>
+  {/if}
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -148,6 +168,38 @@
   .bp-canvas {
     width: 100%;
     height: 100%;
+    position: relative;
+  }
+
+  .mode-badge {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font: 700 9px/1 "IBM Plex Mono", monospace;
+    letter-spacing: 0.08em;
+    color: oklch(0.46 0.1 78);
+    background: oklch(0.98 0.012 78);
+    border: 1px solid oklch(0.8 0.06 78);
+    padding: 5px 9px;
+    border-radius: 3px;
+    pointer-events: none;
+  }
+
+  .mode-badge.stateful {
+    color: oklch(0.4 0.1 200);
+    background: oklch(0.97 0.025 200);
+    border-color: oklch(0.7 0.08 200);
+  }
+
+  .mode-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
   }
 
   /* ── SvelteFlow controls theming ────────────────────────────────────────── */

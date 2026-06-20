@@ -14,7 +14,9 @@ defmodule NsparkWeb.StudioLive do
   alias Nspark.Architecture.{Graph, Node, Edge}
   alias Nspark.Projects.Project
 
-  # The nine node types, in compile order, for the left-rail palette.
+  # Node types for the left-rail palette. The context layer (always in the prompt)
+  # plus the PromptBasic control layer (`rule`/`state`) — see
+  # docs/pivot/DESIGN_MEMO_two_layer_lens.md §3.
   @node_palette [
     {:persona, 255},
     {:constraint, 28},
@@ -25,7 +27,9 @@ defmodule NsparkWeb.StudioLive do
     {:tool, 50},
     {:evaluation, 130},
     {:output, 300},
-    {:agent, 255}
+    {:agent, 255},
+    {:rule, 292},
+    {:state, 200}
   ]
   @palette_types Enum.map(@node_palette, fn {t, _} -> t end)
 
@@ -40,6 +44,7 @@ defmodule NsparkWeb.StudioLive do
      |> assign(:nodes, [])
      |> assign(:flow_nodes, [])
      |> assign(:flow_edges, [])
+     |> assign(:control_mode, nil)
      |> assign(:edges, [])
      |> assign(:edge_count, 0)
      |> assign(:variables, [])
@@ -197,7 +202,16 @@ defmodule NsparkWeb.StudioLive do
         end
       end)
 
-    {:noreply, socket |> assign(:nodes, nodes) |> mark_dirty()}
+    moved = Enum.find(nodes, &(&1.id == id))
+
+    # Priority = vertical stack order (memo §3): moving a rule re-derives rule
+    # priorities from canvas y (top wins), then refresh so badges/lens/mode update.
+    if moved && moved.type == :rule do
+      reorder_rule_priorities(nodes, opts)
+      {:noreply, socket |> refresh() |> mark_dirty()}
+    else
+      {:noreply, socket |> assign(:nodes, nodes) |> mark_dirty()}
+    end
   end
 
   # ── connect → create edge ────────────────────────────────────────────────────
@@ -333,6 +347,36 @@ defmodule NsparkWeb.StudioLive do
               _ -> m
             end
           end)
+
+        _ = Ash.update!(node, %{metadata: meta}, ash_opts(socket))
+        {:noreply, socket |> refresh() |> mark_dirty()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Control-layer (rule/state) metadata: priority/section/otherwise on rules,
+  # `initial` on states. Editing these is what makes the canvas the authoring surface.
+  def handle_event("update_control_metadata", params, socket) do
+    case socket.assigns.selected do
+      %{type: type} = node when type in [:rule, :state] ->
+        meta =
+          (node.metadata || %{})
+          |> then(fn m ->
+            case Integer.parse(Map.get(params, "priority", "")) do
+              {p, ""} -> Map.put(m, "priority", p)
+              _ -> m
+            end
+          end)
+          |> then(fn m ->
+            case Map.get(params, "section") do
+              nil -> m
+              s -> Map.put(m, "section", if(String.trim(s) == "", do: nil, else: String.trim(s)))
+            end
+          end)
+          |> put_bool_param(params, "otherwise")
+          |> put_bool_param(params, "initial")
 
         _ = Ash.update!(node, %{metadata: meta}, ash_opts(socket))
         {:noreply, socket |> refresh() |> mark_dirty()}
@@ -980,29 +1024,42 @@ defmodule NsparkWeb.StudioLive do
     base_meta = %{"position" => pos}
 
     meta =
-      if type_atom == :agent do
-        Map.merge(base_meta, %{
-          "output_var" => "",
-          "input_mapping" => %{},
-          "on_error" => "fail",
-          "source_graph_id" => nil,
-          "source_deployment_id" => nil
-        })
-      else
-        base_meta
+      case type_atom do
+        :agent ->
+          Map.merge(base_meta, %{
+            "output_var" => "",
+            "input_mapping" => %{},
+            "on_error" => "fail",
+            "source_graph_id" => nil,
+            "source_deployment_id" => nil
+          })
+
+        # Control layer: priority is the rule's vertical stack order (top wins).
+        :rule ->
+          Map.merge(base_meta, %{"priority" => 10, "section" => nil, "otherwise" => false})
+
+        _ ->
+          base_meta
       end
 
     Ash.create!(
       Node,
       %{
         type: type_atom,
-        label: "New #{type_atom |> to_string() |> String.capitalize()}",
+        label: default_label(type_atom),
+        content: default_content(type_atom),
         graph_id: socket.assigns.graph.id,
         metadata: meta
       },
       ash_opts(socket)
     )
   end
+
+  defp default_label(:state), do: "new_state"
+  defp default_label(type), do: "New #{type |> to_string() |> String.capitalize()}"
+
+  defp default_content(:rule), do: "[WHEN] condition\n[RESPOND]\nReply here.\n[STOP]"
+  defp default_content(_), do: nil
 
   defp load_from_params(socket, params, all_graphs) do
     graph =
@@ -1025,6 +1082,7 @@ defmodule NsparkWeb.StudioLive do
       |> assign(:edges, [])
       |> assign(:flow_nodes, [])
       |> assign(:flow_edges, [])
+      |> assign(:control_mode, nil)
       |> assign(:edge_count, 0)
       |> assign(:variables, [])
       |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0, cost_estimate: 0.0, provider: :anthropic, resolved_assets: []})
@@ -1069,7 +1127,8 @@ defmodule NsparkWeb.StudioLive do
 
     diagnostics =
       Nspark.Registry.resolution_diagnostics(resolution.problems) ++
-        Nspark.Diagnostics.run(resolved_nodes, edges)
+        Nspark.Diagnostics.run(resolved_nodes, edges) ++
+        Nspark.PromptBasic.Lens.diagnostics(nodes)
 
     node_diagnostics = build_node_diagnostics(diagnostics)
     var_node_ids = var_node_ids_for(socket.assigns[:selected_variable], resolved_nodes)
@@ -1085,7 +1144,8 @@ defmodule NsparkWeb.StudioLive do
     |> assign(:nodes, nodes)
     |> assign(:edges, edges)
     |> assign(:flow_nodes, to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order, parallel_ids))
-    |> assign(:flow_edges, to_flow_edges(edges))
+    |> assign(:flow_edges, to_flow_edges(edges) ++ control_edges(nodes))
+    |> assign(:control_mode, control_mode(nodes))
     |> assign(:edge_count, length(edges))
     |> assign(:variables, variables_in(resolved_nodes))
     |> assign(:compiled, compiled)
@@ -1508,6 +1568,8 @@ defmodule NsparkWeb.StudioLive do
         type: cond do
           n.type == :conditional -> "conditional"
           n.type == :agent -> "agent"
+          n.type == :rule -> "rule"
+          n.type == :state -> "state"
           true -> "blueprint"
         end,
         position: position_for(n, i),
@@ -1526,7 +1588,12 @@ defmodule NsparkWeb.StudioLive do
           on_error: Map.get(meta, "on_error", "fail"),
           deployment_version: Map.get(meta, "deployment_version"),
           timeout_ms: Map.get(meta, "timeout_ms", 10_000),
-          parallel: n.type == :agent and MapSet.member?(parallel_ids, n.id)
+          parallel: n.type == :agent and MapSet.member?(parallel_ids, n.id),
+          # Control layer (rule/state): structure read off the node metadata.
+          priority: Map.get(meta, "priority"),
+          section: Map.get(meta, "section"),
+          otherwise: Map.get(meta, "otherwise", false),
+          initial: Map.get(meta, "initial", false)
         }
       }
     end)
@@ -1534,6 +1601,92 @@ defmodule NsparkWeb.StudioLive do
 
   defp position_for(%{metadata: %{"position" => %{"x" => x, "y" => y}}}, _i), do: %{x: x, y: y}
   defp position_for(_n, i), do: %{x: 160, y: 40 + i * 150}
+
+  # Mode-aware rendering (memo §4): compile the graph's control-layer nodes to an IR
+  # and report whether the canvas is a flat priority ladder or a state machine.
+  # Returns nil when there are no rule/state nodes (badge hidden).
+  defp control_mode(nodes) do
+    if Enum.any?(nodes, &(&1.type in [:rule, :state])) do
+      ir = Nspark.PromptBasic.Compiler.from_graph(nodes)
+      %{kind: to_string(Nspark.PromptBasic.IR.mode(ir)), states: length(Nspark.PromptBasic.IR.states(ir))}
+    else
+      nil
+    end
+  end
+
+  # Re-derive rule priorities from canvas y-position (top wins). Cross-state rules
+  # never compete (their `state =` guards differ), so a single global y-ranking keeps
+  # every intra-state ordering correct. `[OTHERWISE]` rules are excluded (no priority).
+  defp reorder_rule_priorities(nodes, opts) do
+    sorted =
+      nodes
+      |> Enum.filter(&(&1.type == :rule and not control_flag(&1, "otherwise")))
+      |> Enum.sort_by(&node_y/1)
+
+    count = length(sorted)
+
+    sorted
+    |> Enum.with_index()
+    |> Enum.each(fn {n, i} ->
+      prio = (count - i) * 10
+      meta = n.metadata || %{}
+
+      if Map.get(meta, "priority") != prio do
+        Ash.update!(n, %{metadata: Map.put(meta, "priority", prio)}, opts)
+      end
+    end)
+  end
+
+  defp node_y(%{metadata: %{"position" => %{"y" => y}}}), do: y
+  defp node_y(_), do: 0
+  defp control_flag(%{metadata: m}, key) when is_map(m), do: m[key] == true
+  defp control_flag(_, _), do: false
+
+  # Derived (non-persisted) edges that make the state machine legible: a transition
+  # edge for each rule's `[STATE] X` write (rule → state) and a dashed containment
+  # edge for each `when state = X` guard (state → rule). Computed from the IR so they
+  # always agree with the lens/selector; never written to the DB.
+  defp control_edges(nodes) do
+    if Enum.any?(nodes, &(&1.type in [:rule, :state])) do
+      ir = Nspark.PromptBasic.Compiler.from_graph(nodes)
+      rule_node = Nspark.PromptBasic.Compiler.rule_id_to_node_id(nodes)
+
+      state_node =
+        nodes
+        |> Enum.filter(&(&1.type == :state and not &1.is_muted))
+        |> Map.new(&{&1.label, &1.id})
+
+      Enum.flat_map(ir.rules, fn r ->
+        rid = rule_node[r.id]
+
+        transitions =
+          for s <- r.state_writes, tgt = state_node[s], rid && tgt do
+            %{id: "pb-t-#{r.id}-#{s}", source: rid, target: tgt, type: "smoothstep",
+              animated: true, style: "stroke: oklch(0.55 0.13 200);"}
+          end
+
+        guards =
+          for a <- r.atoms, a.key == "state", a.op == "=", src = state_node[a.value], rid && src do
+            %{id: "pb-c-#{a.value}-#{r.id}", source: src, target: rid, type: "smoothstep",
+              style: "stroke: oklch(0.8 0.04 200); stroke-dasharray: 4 4;"}
+          end
+
+        transitions ++ guards
+      end)
+    else
+      []
+    end
+  end
+
+  # Phoenix sends an unchecked checkbox by omitting it; we pair each checkbox with a
+  # hidden `value="false"`, so a present "true"/"false" string is authoritative.
+  defp put_bool_param(meta, params, key) do
+    case Map.get(params, key) do
+      "true" -> Map.put(meta, key, true)
+      "false" -> Map.put(meta, key, false)
+      _ -> meta
+    end
+  end
 
   defp to_flow_edges(edges) do
     Enum.map(edges, fn e ->
@@ -1815,7 +1968,7 @@ defmodule NsparkWeb.StudioLive do
               <.svelte
                 name="GraphCanvas"
                 id="studio-graph-canvas"
-                props={%{nodes: @flow_nodes, edges: @flow_edges}}
+                props={%{nodes: @flow_nodes, edges: @flow_edges, mode: @control_mode}}
                 socket={@socket}
                 ssr={false}
               />
@@ -1843,13 +1996,58 @@ defmodule NsparkWeb.StudioLive do
                   phx-change="update_node"
                   phx-submit="update_node"
                 >
-                  <div class="insp-field-label">LABEL</div>
+                  <div class="insp-field-label">{if @selected.type == :state, do: "STATE NAME", else: "LABEL"}</div>
                   <.input
                     type="text"
                     name="label"
                     value={@selected.label}
                     phx-debounce="500"
                   />
+                </.form>
+
+                <%!-- Control layer: priority/section/otherwise (rule) · initial (state) --%>
+                <.form
+                  :if={@selected.type in [:rule, :state]}
+                  for={%{}}
+                  id={"control-form-#{@selected.id}"}
+                  phx-change="update_control_metadata"
+                >
+                  <% cmeta = @selected.metadata || %{} %>
+                  <%= if @selected.type == :rule do %>
+                    <div class="insp-field-label">PRIORITY</div>
+                    <input
+                      type="number"
+                      name="priority"
+                      value={Map.get(cmeta, "priority", 10)}
+                      step="10"
+                      phx-debounce="500"
+                      class="insp-agent-input"
+                      disabled={Map.get(cmeta, "otherwise") == true}
+                    />
+                    <div class="insp-agent-hint">Higher wins. Also set by dragging the card up/down.</div>
+
+                    <div class="insp-field-label">SECTION</div>
+                    <input
+                      type="text"
+                      name="section"
+                      value={Map.get(cmeta, "section") || ""}
+                      phx-debounce="500"
+                      class="insp-agent-input"
+                      placeholder="e.g. INTAKE"
+                    />
+
+                    <label class="insp-toggle">
+                      <span>Fallback rule ([OTHERWISE])</span>
+                      <input type="hidden" name="otherwise" value="false" />
+                      <input type="checkbox" name="otherwise" value="true" checked={Map.get(cmeta, "otherwise") == true} />
+                    </label>
+                  <% else %>
+                    <label class="insp-toggle">
+                      <span>Initial state (START)</span>
+                      <input type="hidden" name="initial" value="false" />
+                      <input type="checkbox" name="initial" value="true" checked={Map.get(cmeta, "initial") == true} />
+                    </label>
+                  <% end %>
                 </.form>
 
                 <%= if @selected.type == :agent do %>
@@ -1951,8 +2149,10 @@ defmodule NsparkWeb.StudioLive do
                       </button>
                     </div>
                   <% else %>
-                    <div class="insp-field-label">INSTRUCTION · MARKDOWN</div>
+                    <% editor_label = if @selected.type == :rule, do: "RULE BODY · [WHEN] / ACTIONS", else: "INSTRUCTION · MARKDOWN" %>
+                    <div :if={@selected.type != :state} class="insp-field-label">{editor_label}</div>
                     <.svelte
+                      :if={@selected.type != :state}
                       name="CodeEditor"
                       id="studio-code-editor"
                       props={%{

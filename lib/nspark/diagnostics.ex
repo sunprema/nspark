@@ -65,7 +65,12 @@ defmodule Nspark.Diagnostics do
 
   defp check_floating(diags, nodes, edges) do
     connected = edge_node_id_set(edges)
-    floating = Enum.filter(nodes, fn n -> not MapSet.member?(connected, node_id(n)) end)
+    # Control-layer nodes (rule/state) intentionally carry their transitions in the
+    # rule body, not as edges, so they are never "floating" — exclude them here.
+    floating =
+      nodes
+      |> Enum.reject(&(node_type(&1) in [:rule, :state]))
+      |> Enum.filter(fn n -> not MapSet.member?(connected, node_id(n)) end)
 
     case floating do
       [] ->
