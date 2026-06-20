@@ -55,6 +55,14 @@
     {#if data.section}
       <span class="rule-section">{data.section}</span>
     {/if}
+    <!-- Test layer: pass/fail dot per rule; a drains counter on the fallback. -->
+    {#if isOtherwise && data.test_drains > 0}
+      <span class="test-badge test-badge--gap" title="scenarios that drained here">⌽ {data.test_drains}</span>
+    {:else if data.test_status === "pass"}
+      <span class="test-mark test-mark--pass" title="covered by a passing scenario">●</span>
+    {:else if data.test_status === "fail"}
+      <span class="test-mark test-mark--fail" title="a scenario expectation failed">●</span>
+    {/if}
   </div>
 
   <div class="rule-when">
@@ -164,6 +172,30 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 90px;
+  }
+
+  .test-mark {
+    font-size: 9px;
+    line-height: 1;
+  }
+
+  .test-mark--pass {
+    color: oklch(0.6 0.15 150);
+  }
+
+  .test-mark--fail {
+    color: oklch(0.6 0.19 28);
+  }
+
+  .test-badge {
+    font: 700 8px/1 "IBM Plex Mono", monospace;
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+
+  .test-badge--gap {
+    color: oklch(0.45 0.13 80);
+    background: oklch(0.95 0.05 80);
   }
 
   .rule-when {

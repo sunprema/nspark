@@ -47,6 +47,10 @@ defmodule NsparkWeb.StudioLive do
      |> assign(:control_mode, nil)
      |> assign(:promptbasic_export, "")
      |> assign(:compiled_program, "")
+     |> assign(:scenarios, [])
+     |> assign(:test_results_by_id, %{})
+     |> assign(:test_summary, nil)
+     |> assign(:selected_scenario_id, nil)
      |> assign(:edges, [])
      |> assign(:edge_count, 0)
      |> assign(:variables, [])
@@ -391,6 +395,93 @@ defmodule NsparkWeb.StudioLive do
   def handle_event("delete_node", %{"id" => id}, socket) do
     destroy_node(id, socket)
     {:noreply, socket |> assign(:selected, nil) |> refresh() |> mark_dirty()}
+  end
+
+  # ── test layer (Phase 4): scenario CRUD + run + rule scaffold ─────────────────
+
+  def handle_event("add_scenario", _params, socket) do
+    scenario =
+      Ash.create!(
+        Nspark.Architecture.TestScenario,
+        %{graph_id: socket.assigns.graph.id, name: "New scenario"},
+        ash_opts(socket)
+      )
+
+    # Scenarios are test data, not graph structure — they never dirty the graph.
+    {:noreply, socket |> assign(:selected_scenario_id, scenario.id) |> refresh()}
+  end
+
+  def handle_event("select_scenario", %{"id" => id}, socket) do
+    current = socket.assigns.selected_scenario_id
+    {:noreply, assign(socket, :selected_scenario_id, if(current == id, do: nil, else: id))}
+  end
+
+  def handle_event("update_scenario", %{"id" => id} = params, socket) do
+    case find_scenario(socket, id) do
+      nil ->
+        {:noreply, socket}
+
+      scenario ->
+        attrs =
+          %{}
+          |> put_if_present(params, "name", &(String.trim(&1) != ""))
+          |> Map.put(:given_state, blank_to_nil(params["given_state"]))
+          |> Map.put(:given_conds, parse_csv(params["given_conds"]))
+          |> Map.put(:expect, build_expect(params))
+
+        _ = Ash.update!(scenario, attrs, ash_opts(socket))
+        {:noreply, refresh(socket)}
+    end
+  end
+
+  def handle_event("delete_scenario", %{"id" => id}, socket) do
+    case find_scenario(socket, id) do
+      nil -> {:noreply, socket}
+      scenario -> _ = Ash.destroy!(scenario, ash_opts(socket))
+    end
+
+    selected = if socket.assigns.selected_scenario_id == id, do: nil, else: socket.assigns.selected_scenario_id
+    {:noreply, socket |> assign(:selected_scenario_id, selected) |> refresh()}
+  end
+
+  # Results recompute live in refresh/1; "Run" is an explicit re-evaluation with feedback.
+  def handle_event("run_scenarios", _params, socket) do
+    socket = refresh(socket)
+
+    msg =
+      case socket.assigns.test_summary do
+        nil -> "No scenarios to run."
+        s -> "#{s.passed} pass · #{s.drained} gap · #{s.failed} fail"
+      end
+
+    {:noreply, put_flash(socket, :info, "Test layer — #{msg}")}
+  end
+
+  # Scaffold a rule pre-filled from a drained scenario's given facts (memo §6 / Phase 4):
+  # turn "this input should be handled" into a starter rule that would handle it.
+  def handle_event("add_rule_for_scenario", %{"id" => id}, socket) do
+    case find_scenario(socket, id) do
+      nil ->
+        {:noreply, socket}
+
+      scenario ->
+        priority = next_rule_priority(socket.assigns.nodes)
+        pos = %{"x" => 700, "y" => 40 + length(socket.assigns.nodes) * 40}
+
+        Ash.create!(
+          Node,
+          %{
+            type: :rule,
+            label: scenario.name,
+            content: scaffold_rule_content(scenario),
+            graph_id: socket.assigns.graph.id,
+            metadata: %{"position" => pos, "priority" => priority, "section" => "SCAFFOLDED", "otherwise" => false}
+          },
+          ash_opts(socket)
+        )
+
+        {:noreply, socket |> refresh() |> mark_dirty()}
+    end
   end
 
   # ── registry: add linked node ────────────────────────────────────────────────
@@ -1087,6 +1178,10 @@ defmodule NsparkWeb.StudioLive do
       |> assign(:control_mode, nil)
       |> assign(:promptbasic_export, "")
       |> assign(:compiled_program, "")
+      |> assign(:scenarios, [])
+      |> assign(:test_results_by_id, %{})
+      |> assign(:test_summary, nil)
+      |> assign(:selected_scenario_id, nil)
       |> assign(:edge_count, 0)
       |> assign(:variables, [])
       |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0, cost_estimate: 0.0, provider: :anthropic, resolved_assets: []})
@@ -1144,10 +1239,17 @@ defmodule NsparkWeb.StudioLive do
         name -> compute_variable_info(name, resolved_nodes)
       end
 
+    # Test layer (Phase 4): scenarios run live through the Selector, so canvas dots
+    # and the panel summary always reflect the current rules + scenarios.
+    scenarios = Nspark.Architecture.scenarios_for_graph!(graph.id, opts)
+    {test_results, test_summary} = run_scenarios(nodes, scenarios)
+    test_node_status = test_summary.node_status
+    test_drains = test_summary.drains
+
     socket
     |> assign(:nodes, nodes)
     |> assign(:edges, edges)
-    |> assign(:flow_nodes, to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order, parallel_ids))
+    |> assign(:flow_nodes, to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order, parallel_ids, test_node_status, test_drains))
     |> assign(:flow_edges, to_flow_edges(edges) ++ control_edges(nodes))
     |> assign(:control_mode, control_mode(nodes))
     |> assign(:promptbasic_export, promptbasic_export(nodes))
@@ -1159,7 +1261,81 @@ defmodule NsparkWeb.StudioLive do
     |> assign(:diagnostics, diagnostics)
     |> assign(:variable_producers, var_producers)
     |> assign(:variable_consumers, var_consumers)
+    |> assign(:scenarios, scenarios)
+    |> assign(:test_results_by_id, Map.new(test_results, &{&1.scenario.id, &1}))
+    |> assign(:test_summary, if(scenarios == [], do: nil, else: test_summary))
     |> assign(:selected, selected_id && Enum.find(nodes, &(&1.id == selected_id)))
+  end
+
+  defp scenario_status_label(:pass), do: "pass"
+  defp scenario_status_label(:fail), do: "fail"
+  defp scenario_status_label(:drain), do: "gap"
+  defp scenario_status_label(_), do: ""
+
+  defp find_scenario(socket, id), do: Enum.find(socket.assigns.scenarios, &(&1.id == id))
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(s) when is_binary(s), do: if(String.trim(s) == "", do: nil, else: String.trim(s))
+
+  defp parse_csv(nil), do: []
+  defp parse_csv(s) when is_binary(s) do
+    s |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+  end
+
+  # Build the expect map from the form. Only asserted keys are stored; the runner
+  # checks exactly what's present. "handled" is asserted only when the box is checked.
+  defp build_expect(params) do
+    %{}
+    |> then(fn m -> if params["expect_handled"] == "true", do: Map.put(m, "handled", true), else: m end)
+    |> put_expect_str("state_to", params["expect_state_to"])
+    |> put_expect_str("tool", params["expect_tool"])
+  end
+
+  defp put_expect_str(map, key, val) do
+    case blank_to_nil(val) do
+      nil -> map
+      v -> Map.put(map, key, v)
+    end
+  end
+
+  # One above the current highest rule priority, so a scaffolded rule actually fires.
+  defp next_rule_priority(nodes) do
+    nodes
+    |> Enum.filter(&(&1.type == :rule and Map.get(&1.metadata || %{}, "otherwise") != true))
+    |> Enum.map(&(Map.get(&1.metadata || %{}, "priority") || 0))
+    |> Enum.max(fn -> 0 end)
+    |> Kernel.+(10)
+  end
+
+  # A starter rule body from a scenario: a [WHEN] from its state guard + conditions,
+  # the expected [STATE]/[TOOL] when given, and a placeholder [RESPOND].
+  defp scaffold_rule_content(scenario) do
+    state_atom = if scenario.given_state, do: ["state = #{scenario.given_state}"], else: []
+    atoms = state_atom ++ scenario.given_conds
+    when_line = if atoms == [], do: "[WHEN] condition", else: "[WHEN] " <> Enum.join(atoms, " AND ")
+
+    expect = scenario.expect || %{}
+    tool_line = if expect["tool"], do: ["[TOOL] #{expect["tool"]} -> result"], else: []
+    state_line = if expect["state_to"], do: ["[STATE] #{expect["state_to"]}"], else: []
+
+    ([when_line] ++ tool_line ++ state_line ++ ["[RESPOND]", "TODO: handle this case.", "[STOP]"])
+    |> Enum.join("\n")
+  end
+
+  # Run the graph's scenarios through the Test layer. Scenario records carry their
+  # id into the runner input so results can be keyed back to the DB row.
+  defp run_scenarios(nodes, scenarios) do
+    inputs =
+      Enum.map(scenarios, fn s ->
+        %{
+          id: s.id,
+          name: s.name,
+          given: %{state: s.given_state, memory: s.given_memory, conds: s.given_conds},
+          expect: s.expect
+        }
+      end)
+
+    Nspark.PromptBasic.TestRunner.run(nodes, inputs)
   end
 
   defp render_compiled(""), do: ""
@@ -1556,7 +1732,7 @@ defmodule NsparkWeb.StudioLive do
     end
   end
 
-  defp to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order, parallel_ids) do
+  defp to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order, parallel_ids, test_node_status \\ %{}, test_drains \\ 0) do
     nodes
     |> Enum.with_index()
     |> Enum.map(fn {n, i} ->
@@ -1564,6 +1740,13 @@ defmodule NsparkWeb.StudioLive do
         case Map.get(node_diagnostics, n.id) do
           :error -> "error"
           :warning -> "warning"
+          nil -> nil
+        end
+
+      test_status =
+        case Map.get(test_node_status, n.id) do
+          :pass -> "pass"
+          :fail -> "fail"
           nil -> nil
         end
 
@@ -1599,7 +1782,10 @@ defmodule NsparkWeb.StudioLive do
           priority: Map.get(meta, "priority"),
           section: Map.get(meta, "section"),
           otherwise: Map.get(meta, "otherwise", false),
-          initial: Map.get(meta, "initial", false)
+          initial: Map.get(meta, "initial", false),
+          # Test layer: per-rule pass/fail dot; drains count on the [OTHERWISE] node.
+          test_status: test_status,
+          test_drains: if(n.type == :rule and Map.get(meta, "otherwise", false), do: test_drains, else: nil)
         }
       }
     end)
@@ -1895,6 +2081,89 @@ defmodule NsparkWeb.StudioLive do
                     phx-value-id={n.id}
                   >{n.label}</button>
                 </div>
+              </div>
+            <% end %>
+
+            <%!-- Test layer (Phase 4): scenarios run through the Selector --%>
+            <div :if={@control_mode} class="rail-head rail-head--mt rail-head--row">
+              <span>TEST LAYER</span>
+              <button type="button" phx-click="add_scenario" class="rail-add-btn" title="Add a scenario">
+                + Scenario
+              </button>
+            </div>
+            <%= if @control_mode do %>
+              <div :if={@scenarios == []} class="rail-hint">
+                No scenarios yet. Add one to test which inputs your rules handle.
+              </div>
+              <div :if={@scenarios != []} class="test-panel">
+                <div class="test-actions">
+                  <button type="button" phx-click="run_scenarios" class="test-run-btn">▶ Run</button>
+                  <span :if={@test_summary} class="test-tally">
+                    <span class="test-tally-pass">{@test_summary.passed}✓</span>
+                    <span class="test-tally-gap">{@test_summary.drained}⌽</span>
+                    <span class="test-tally-fail">{@test_summary.failed}✕</span>
+                  </span>
+                </div>
+                <%= for s <- @scenarios do %>
+                  <% r = @test_results_by_id[s.id] %>
+                  <% st = r && r.status %>
+                  <div class={["test-row", @selected_scenario_id == s.id && "test-row--open"]}>
+                    <button type="button" phx-click="select_scenario" phx-value-id={s.id} class="test-row-head">
+                      <span class={[
+                        "test-dot",
+                        st == :pass && "test-dot--pass",
+                        st == :fail && "test-dot--fail",
+                        st == :drain && "test-dot--gap"
+                      ]}></span>
+                      <span class="test-row-name">{s.name}</span>
+                      <span :if={st} class="test-row-status">{scenario_status_label(st)}</span>
+                    </button>
+
+                    <%= if @selected_scenario_id == s.id do %>
+                      <.form for={%{}} phx-change="update_scenario" class="test-form">
+                        <input type="hidden" name="id" value={s.id} />
+                        <label class="test-field-label">NAME</label>
+                        <input type="text" name="name" value={s.name} phx-debounce="500" class="test-input" />
+
+                        <label class="test-field-label">GIVEN STATE</label>
+                        <input type="text" name="given_state" value={s.given_state || ""} phx-debounce="500" class="test-input" placeholder="(initial state)" />
+
+                        <label class="test-field-label">TRUE CONDITIONS (comma-separated)</label>
+                        <input type="text" name="given_conds" value={Enum.join(s.given_conds, ", ")} phx-debounce="500" class="test-input" placeholder="user_wants_return, has_order_id" />
+
+                        <label class="test-field-label">EXPECT</label>
+                        <label class="test-check">
+                          <input type="hidden" name="expect_handled" value="false" />
+                          <input type="checkbox" name="expect_handled" value="true" checked={Map.get(s.expect, "handled") == true} />
+                          handled (a rule fires)
+                        </label>
+                        <input type="text" name="expect_state_to" value={Map.get(s.expect, "state_to") || ""} phx-debounce="500" class="test-input" placeholder="→ state (optional)" />
+                        <input type="text" name="expect_tool" value={Map.get(s.expect, "tool") || ""} phx-debounce="500" class="test-input" placeholder="tool called (optional)" />
+                      </.form>
+
+                      <div :if={r} class="test-result">
+                        <div class="test-result-fired">
+                          fired: <strong>{if r.fired == :otherwise, do: "OTHERWISE (drained)", else: r.fired}</strong>
+                          <span :if={r.tie != [] and length(r.tie) > 1}> · tie {Enum.join(r.tie, ", ")}</span>
+                        </div>
+                        <div :for={f <- r.failures} class="test-result-fail">↳ {f}</div>
+                        <button
+                          :if={r.drained}
+                          type="button"
+                          phx-click="add_rule_for_scenario"
+                          phx-value-id={s.id}
+                          class="test-scaffold-btn"
+                        >
+                          + Add rule for this gap
+                        </button>
+                      </div>
+
+                      <button type="button" phx-click="delete_scenario" phx-value-id={s.id} class="test-delete-btn">
+                        Delete scenario
+                      </button>
+                    <% end %>
+                  </div>
+                <% end %>
               </div>
             <% end %>
 

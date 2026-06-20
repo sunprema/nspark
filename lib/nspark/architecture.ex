@@ -5,7 +5,7 @@ defmodule Nspark.Architecture do
   """
   use Ash.Domain, otp_app: :nspark, extensions: [AshAdmin.Domain, AshPaperTrail.Domain]
 
-  alias Nspark.Architecture.{Graph, Node, Edge, GraphVersion}
+  alias Nspark.Architecture.{Graph, Node, Edge, GraphVersion, TestScenario}
   import Ash.Query, only: [filter: 2]
 
   admin do
@@ -25,6 +25,10 @@ defmodule Nspark.Architecture do
 
     resource GraphVersion do
       define :versions_for_graph, action: :list_for_graph, args: [:graph_id]
+    end
+
+    resource TestScenario do
+      define :scenarios_for_graph, action: :list_for_graph, args: [:graph_id]
     end
   end
 

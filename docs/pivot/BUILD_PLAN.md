@@ -121,13 +121,23 @@ Goal: the control layer the canvas was missing.
 - [ ] **Deferred:** true nested state containers (SvelteFlow parent/extent) — containment is shown via
   dashed edges for now.
 
-## Phase 4 — Test layer in the Studio
+## Phase 4 — Test layer in the Studio  ✅ DONE
 
 Goal: catch the gaps the lens can't (memo §6).
-- Scenario editor (state + memory + true conditions + expected) persisted per graph.
-- Run via `Selector`; per-rule green/red dots; a "drains" counter on the `[OTHERWISE]` node.
-- "Add rule for this scenario" affordance on each drained gap.
-- **DoD:** define scenarios in UI, run, see pass/gap, one-click scaffold a rule for a gap.
+- [x] `Nspark.PromptBasic.TestRunner`: runs scenarios through the `Selector`, classifying each
+  pass / fail / drain, with per-node attribution (red-wins) + a drains count. Pure + tested.
+- [x] Persistence: `Nspark.Architecture.TestScenario` resource (per graph; given_state/given_memory/
+  given_conds/expect) + migration via `mix ash.codegen`. Expectations are stable facts
+  (handled/state_to/tool), never rule ids.
+- [x] Studio "TEST LAYER" rail panel: add/select/edit/delete scenarios, a Run button + pass·gap·fail
+  tally. Results recompute **live** in `refresh/1` (like the lens), so dots stay current.
+- [x] Canvas indicators: per-rule green/red test dot + a "⌽ N" drains counter on the `[OTHERWISE]`
+  node (`RuleNode.svelte`, fed via `to_flow_nodes`).
+- [x] "Add rule for this gap" on a drained scenario scaffolds a rule pre-filled from its given facts
+  (`[WHEN]` from state guard + conds, expected `[STATE]`/`[TOOL]`, placeholder `[RESPOND]`),
+  priority = max + 10 so it actually fires.
+- **DoD met (verified live):** added a scenario in the UI, saw it drain (GAP), one-click scaffolded a
+  `# SCAFFOLDED` rule into the graph; a matching scenario shows PASS (green dot).
 
 ## Phase 5 — Format-first export  ✅ DONE
 
