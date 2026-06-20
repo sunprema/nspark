@@ -26,12 +26,19 @@ defmodule Nspark.Diagnostics do
   def run(nodes, edges) do
     active = Enum.reject(nodes, &muted?/1)
 
+    # A control-layer (PromptBasic) graph is a different artifact than a context-layer
+    # prompt graph: its memory/tool nodes are referenced by token (not edges) and a
+    # persona/output schema isn't required — the PromptBasic lens governs it instead.
+    # So the context-layer-only checks (floating declarations, persona, output) are
+    # suppressed when a control layer is present, to avoid false-positive noise.
+    control_layer? = Enum.any?(active, &(node_type(&1) in [:rule, :state]))
+
     []
     |> check_cycle(active, edges)
-    |> check_floating(active, edges)
-    |> check_no_persona(active)
+    |> check_floating(active, edges, control_layer?)
+    |> check_no_persona(active, control_layer?)
     |> check_multiple_personas(active)
-    |> check_no_output(active)
+    |> check_no_output(active, control_layer?)
     |> check_empty_output(active)
     |> check_multiple_outputs(active)
     |> check_agent_nodes(active)
@@ -61,15 +68,19 @@ defmodule Nspark.Diagnostics do
     end
   end
 
-  defp check_floating(diags, nodes, _edges) when length(nodes) < 2, do: diags
+  defp check_floating(diags, nodes, _edges, _control?) when length(nodes) < 2, do: diags
 
-  defp check_floating(diags, nodes, edges) do
+  defp check_floating(diags, nodes, edges, control_layer?) do
     connected = edge_node_id_set(edges)
-    # Control-layer nodes (rule/state) intentionally carry their transitions in the
-    # rule body, not as edges, so they are never "floating" — exclude them here.
+
+    # Node types that are legitimately edge-less and must never count as "floating":
+    # rule/state carry their transitions in the rule body, and in a control-layer
+    # graph memory/tool are referenced by token ({{tool:_}}, state =), not by edges.
+    exempt = if control_layer?, do: [:rule, :state, :memory, :tool], else: [:rule, :state]
+
     floating =
       nodes
-      |> Enum.reject(&(node_type(&1) in [:rule, :state]))
+      |> Enum.reject(&(node_type(&1) in exempt))
       |> Enum.filter(fn n -> not MapSet.member?(connected, node_id(n)) end)
 
     case floating do
@@ -92,9 +103,12 @@ defmodule Nspark.Diagnostics do
     end
   end
 
-  defp check_no_persona(diags, []), do: diags
+  # A control-layer (PromptBasic) agent defines its behavior via rules, not a
+  # persona block, so this context-layer check is suppressed for those graphs.
+  defp check_no_persona(diags, _nodes, true), do: diags
+  defp check_no_persona(diags, [], _control?), do: diags
 
-  defp check_no_persona(diags, nodes) do
+  defp check_no_persona(diags, nodes, _control?) do
     if Enum.any?(nodes, &(node_type(&1) == :persona)),
       do: diags,
       else: [
@@ -126,9 +140,12 @@ defmodule Nspark.Diagnostics do
     end
   end
 
-  defp check_no_output(diags, []), do: diags
+  # Likewise: a control-layer agent's output is the matched rule's [RESPOND]/[ASK],
+  # so an Output-schema node isn't required for those graphs.
+  defp check_no_output(diags, _nodes, true), do: diags
+  defp check_no_output(diags, [], _control?), do: diags
 
-  defp check_no_output(diags, nodes) do
+  defp check_no_output(diags, nodes, _control?) do
     if Enum.any?(nodes, &(node_type(&1) == :output)),
       do: diags,
       else: [

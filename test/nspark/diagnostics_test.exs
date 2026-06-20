@@ -124,4 +124,30 @@ defmodule Nspark.DiagnosticsTest do
       refute :multiple_personas in codes(diags)
     end
   end
+
+  describe "control-layer graphs suppress context-layer-only checks" do
+    # A PromptBasic graph: rules + token-referenced memory/tool declarations, no edges.
+    defp control_nodes do
+      [
+        node("s_idle", :state, nil, metadata: %{"initial" => true}),
+        node("m1", :memory, nil, label: "order_id", metadata: %{"default" => "null"}),
+        node("t1", :tool, "Fetch order", label: "lookup_order", metadata: %{"output" => "order"}),
+        node("r1", :rule, "[WHEN] state = idle AND go\n[STATE] idle\n[RESPOND]\nhi\n[STOP]",
+          metadata: %{"priority" => 10})
+      ]
+    end
+
+    test "no persona/output/floating warnings for a control-layer graph" do
+      codes = Diagnostics.run(control_nodes(), []) |> codes()
+      refute :no_persona in codes
+      refute :no_output in codes
+      refute :floating_node in codes
+    end
+
+    test "those same checks still fire for a context-layer graph" do
+      codes = Diagnostics.run([node("a", :constraint, "do a thing")], []) |> codes()
+      assert :no_persona in codes
+      assert :no_output in codes
+    end
+  end
 end
