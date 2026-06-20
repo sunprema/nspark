@@ -64,7 +64,11 @@
   class:var-consumer={data.var_role === "consumer"}
   style="--spine:{spine}; --type-color:{typeColor};"
 >
-  <Handle type="target" position={Position.Top} />
+  <!-- Handles on all four sides; ConnectionMode.Loose lets each be source or target. -->
+  <Handle type="source" position={Position.Top} id="t" />
+  <Handle type="source" position={Position.Right} id="r" />
+  <Handle type="source" position={Position.Bottom} id="b" />
+  <Handle type="source" position={Position.Left} id="l" />
 
   <div class="bp-header">
     <div class="bp-type-row">
@@ -99,7 +103,6 @@
     </div>
   {/if}
 
-  <Handle type="source" position={Position.Bottom} />
 </div>
 
 <style>

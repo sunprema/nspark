@@ -43,7 +43,12 @@
   class:diag-warning={data.diagnostic === "warning"}
   class:diag-error={data.diagnostic === "error"}
 >
-  <Handle type="target" position={Position.Top} />
+  <!-- A handle on every side so edges can connect from any direction. Each is a
+       source; ConnectionMode.Loose (set on SvelteFlow) lets it also receive. -->
+  <Handle type="source" position={Position.Top} id="t" />
+  <Handle type="source" position={Position.Right} id="r" />
+  <Handle type="source" position={Position.Bottom} id="b" />
+  <Handle type="source" position={Position.Left} id="l" />
 
   <div class="rule-head">
     {#if isOtherwise}
@@ -93,7 +98,6 @@
     {/if}
   </div>
 
-  <Handle type="source" position={Position.Bottom} />
 </div>
 
 <style>

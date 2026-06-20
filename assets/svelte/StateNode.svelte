@@ -15,17 +15,18 @@
   class:diag-warning={data.diagnostic === "warning"}
   class:diag-error={data.diagnostic === "error"}
 >
-  <!-- Single source/target handles: derived transition/containment edges carry no
-       handle id, so a node must have exactly one handle per type for them to attach. -->
-  <Handle type="target" position={Position.Top} />
+  <!-- A handle on every side so transitions can enter/leave from any direction.
+       Each is a source; ConnectionMode.Loose lets it also receive. -->
+  <Handle type="source" position={Position.Top} id="t" />
+  <Handle type="source" position={Position.Right} id="r" />
+  <Handle type="source" position={Position.Bottom} id="b" />
+  <Handle type="source" position={Position.Left} id="l" />
 
   <span class="state-dot"></span>
   <span class="state-name">{name}</span>
   {#if isInitial}
     <span class="state-badge" title="initial state">START</span>
   {/if}
-
-  <Handle type="source" position={Position.Bottom} />
 </div>
 
 <style>

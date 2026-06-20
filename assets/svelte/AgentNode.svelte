@@ -21,7 +21,11 @@
   class:diag-warning={data.diagnostic === "warning"}
   class:diag-error={data.diagnostic === "error"}
 >
-  <Handle type="target" position={Position.Top} />
+  <!-- Handles on all four sides; ConnectionMode.Loose lets each be source or target. -->
+  <Handle type="source" position={Position.Top} id="t" />
+  <Handle type="source" position={Position.Right} id="r" />
+  <Handle type="source" position={Position.Bottom} id="b" />
+  <Handle type="source" position={Position.Left} id="l" />
 
   <div class="agent-header">
     <span class="agent-icon">⬡</span>
@@ -58,8 +62,6 @@
       </span>
     {/if}
   </div>
-
-  <Handle type="source" position={Position.Bottom} />
 </div>
 
 <style>

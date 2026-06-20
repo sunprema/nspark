@@ -1,6 +1,6 @@
 <script>
   import { onMount } from "svelte";
-  import { SvelteFlow, Background, Controls, MiniMap } from "@xyflow/svelte";
+  import { SvelteFlow, Background, Controls, MiniMap, ConnectionMode } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
   import BlueprintNode from "./BlueprintNode.svelte";
   import ConditionalNode from "./ConditionalNode.svelte";
@@ -119,6 +119,7 @@
       source: connection.source,
       target: connection.target,
       sourceHandle: connection.sourceHandle ?? null,
+      targetHandle: connection.targetHandle ?? null,
     });
   }
 
@@ -145,6 +146,7 @@
     bind:edges
     {nodeTypes}
     minZoom={0.2}
+    connectionMode={ConnectionMode.Loose}
     deleteKey={["Backspace", "Delete"]}
     onnodeclick={handleNodeClick}
     onpaneclick={handlePaneClick}

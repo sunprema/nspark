@@ -224,8 +224,21 @@ defmodule NsparkWeb.StudioLive do
 
   def handle_event("connect_nodes", %{"source" => s, "target" => t} = params, socket)
       when is_binary(s) and is_binary(t) and s != t do
-    branch = Map.get(params, "sourceHandle")
-    metadata = if branch, do: %{"branch" => branch, "label" => branch}, else: %{}
+    src_handle = Map.get(params, "sourceHandle")
+    tgt_handle = Map.get(params, "targetHandle")
+
+    # Persist which sides the edge attaches to. Only a conditional yes/no handle
+    # carries branch semantics (and a visible label); plain side handles (t/r/b/l)
+    # are pure attachment points, no label.
+    metadata =
+      %{}
+      |> put_if_value("source_handle", src_handle)
+      |> put_if_value("target_handle", tgt_handle)
+      |> then(fn m ->
+        if src_handle in ["yes", "no"],
+          do: Map.merge(m, %{"branch" => src_handle, "label" => src_handle}),
+          else: m
+      end)
 
     case Ash.create(
            Edge,
@@ -416,7 +429,7 @@ defmodule NsparkWeb.StudioLive do
     {:noreply, assign(socket, :selected_scenario_id, if(current == id, do: nil, else: id))}
   end
 
-  def handle_event("update_scenario", %{"id" => id} = params, socket) do
+  def handle_event("update_scenario", %{"scenario_id" => id} = params, socket) do
     case find_scenario(socket, id) do
       nil ->
         {:noreply, socket}
@@ -1274,6 +1287,9 @@ defmodule NsparkWeb.StudioLive do
 
   defp find_scenario(socket, id), do: Enum.find(socket.assigns.scenarios, &(&1.id == id))
 
+  defp put_if_value(map, _key, nil), do: map
+  defp put_if_value(map, key, value), do: Map.put(map, key, value)
+
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(s) when is_binary(s), do: if(String.trim(s) == "", do: nil, else: String.trim(s))
 
@@ -1871,18 +1887,24 @@ defmodule NsparkWeb.StudioLive do
         |> Enum.filter(&(&1.type == :state and not &1.is_muted))
         |> Map.new(&{&1.label, &1.id})
 
+      # Rule/state nodes carry a handle per side (ids t/r/b/l). Derived edges must
+      # name their endpoint handles or SvelteFlow can't pick among them. Transitions
+      # leave the rule's bottom into the state's top; containment links the state's
+      # right to the rule's left (states sit left of their rules by default).
       Enum.flat_map(ir.rules, fn r ->
         rid = rule_node[r.id]
 
         transitions =
           for s <- r.state_writes, tgt = state_node[s], rid && tgt do
-            %{id: "pb-t-#{r.id}-#{s}", source: rid, target: tgt, type: "smoothstep",
+            %{id: "pb-t-#{r.id}-#{s}", source: rid, target: tgt,
+              sourceHandle: "b", targetHandle: "t", type: "smoothstep",
               animated: true, style: "stroke: oklch(0.55 0.13 200);"}
           end
 
         guards =
           for a <- r.atoms, a.key == "state", a.op == "=", src = state_node[a.value], rid && src do
-            %{id: "pb-c-#{a.value}-#{r.id}", source: src, target: rid, type: "smoothstep",
+            %{id: "pb-c-#{a.value}-#{r.id}", source: src, target: rid,
+              sourceHandle: "r", targetHandle: "l", type: "smoothstep",
               style: "stroke: oklch(0.8 0.04 200); stroke-dasharray: 4 4;"}
           end
 
@@ -1905,12 +1927,17 @@ defmodule NsparkWeb.StudioLive do
 
   defp to_flow_edges(edges) do
     Enum.map(edges, fn e ->
+      meta = e.metadata || %{}
+
       %{
         id: e.id,
         source: e.source_node_id,
         target: e.target_node_id,
-        sourceHandle: Map.get(e.metadata, "branch"),
-        label: Map.get(e.metadata, "label"),
+        # Which side each end attaches to. `branch` is the legacy conditional yes/no
+        # handle (kept as a fallback for edges saved before side handles existed).
+        sourceHandle: Map.get(meta, "source_handle") || Map.get(meta, "branch"),
+        targetHandle: Map.get(meta, "target_handle"),
+        label: Map.get(meta, "label"),
         type: "smoothstep"
       }
     end)
@@ -2121,7 +2148,7 @@ defmodule NsparkWeb.StudioLive do
 
                     <%= if @selected_scenario_id == s.id do %>
                       <.form for={%{}} phx-change="update_scenario" class="test-form">
-                        <input type="hidden" name="id" value={s.id} />
+                        <input type="hidden" name="scenario_id" value={s.id} />
                         <label class="test-field-label">NAME</label>
                         <input type="text" name="name" value={s.name} phx-debounce="500" class="test-input" />
 
