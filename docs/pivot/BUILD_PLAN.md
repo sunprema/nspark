@@ -129,12 +129,19 @@ Goal: catch the gaps the lens can't (memo §6).
 - "Add rule for this scenario" affordance on each drained gap.
 - **DoD:** define scenarios in UI, run, see pass/gap, one-click scaffold a rule for a gap.
 
-## Phase 5 — Format-first export
+## Phase 5 — Format-first export  ✅ DONE
 
 Goal: the works-anywhere deliverable.
-- IR → PromptBasic text + `USAGE_RULES` contract; copy/download in Studio; optional endpoint on
-  `graph_controller.ex`.
-- **DoD:** export a graph as a ready-to-paste PromptBasic block usable in any LLM surface.
+- [x] `Nspark.PromptBasic.Export`: `render/2` bundles a self-contained execution contract (the
+  validated `USAGE_RULES` injection, condensed) with the rendered program (`Compiler.to_source/3`);
+  `program/2` / `contract/0` for the parts. Exports from node `content`, so re-export is faithful
+  (no IR round-trip → the parser atom-order quirk never bites here).
+- [x] Studio: a **"Copy PromptBasic"** button in the Live Compiler controls (reuses the
+  `CopyToClipboard` hook), shown whenever the graph has a control layer.
+- [x] Endpoint: `GET /api/v1/graphs/:graph_id/promptbasic` → downloadable `text/plain`
+  (`<slug>.promptbasic.md`), mirroring the `compile` action's tenant/auth resolution.
+- **DoD met (verified live):** the logistics graph exports a ready-to-paste contract + program
+  block; `export_test.exs` asserts the bundle + that the exported program re-parses to the same IR.
 
 ---
 

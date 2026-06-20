@@ -67,6 +67,7 @@ defmodule NsparkWeb.Router do
     pipe_through [:api]
 
     post "/graphs/:graph_id/compile", GraphController, :compile
+    get "/graphs/:graph_id/promptbasic", GraphController, :export
     post "/deployments/:deployment_id/run", DeploymentController, :run
   end
 

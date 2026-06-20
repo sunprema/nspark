@@ -55,6 +55,34 @@ defmodule NsparkWeb.Api.GraphController do
     end
   end
 
+  @doc """
+  Format-first export (BUILD_PLAN Phase 5): return the graph's control layer as a
+  ready-to-paste PromptBasic deliverable (execution contract + rendered program),
+  served as downloadable `text/plain`.
+  """
+  def export(conn, %{"graph_id" => graph_id}) do
+    user = conn.assigns[:current_user]
+
+    if is_nil(user) do
+      conn |> put_status(401) |> json(%{error: "unauthorized"})
+    else
+      case find_with_tenant(Graph, graph_id, user) do
+        nil ->
+          conn |> put_status(404) |> json(%{error: "graph not found"})
+
+        {graph, org_id} ->
+          opts = [tenant: org_id, actor: user]
+          nodes = Node |> filter(graph_id == ^graph.id) |> sort(inserted_at: :asc) |> Ash.read!(opts)
+          body = Nspark.PromptBasic.Export.render(nodes)
+
+          conn
+          |> put_resp_content_type("text/plain")
+          |> put_resp_header("content-disposition", ~s(attachment; filename="#{graph.slug}.promptbasic.md"))
+          |> send_resp(200, body)
+      end
+    end
+  end
+
   defp find_with_tenant(resource, id, user) do
     user.id
     |> Nspark.Accounts.memberships_for_user!()

@@ -45,6 +45,8 @@ defmodule NsparkWeb.StudioLive do
      |> assign(:flow_nodes, [])
      |> assign(:flow_edges, [])
      |> assign(:control_mode, nil)
+     |> assign(:promptbasic_export, "")
+     |> assign(:compiled_program, "")
      |> assign(:edges, [])
      |> assign(:edge_count, 0)
      |> assign(:variables, [])
@@ -1083,6 +1085,8 @@ defmodule NsparkWeb.StudioLive do
       |> assign(:flow_nodes, [])
       |> assign(:flow_edges, [])
       |> assign(:control_mode, nil)
+      |> assign(:promptbasic_export, "")
+      |> assign(:compiled_program, "")
       |> assign(:edge_count, 0)
       |> assign(:variables, [])
       |> assign(:compiled, %{markdown: "", token_estimate: 0, included: 0, excluded: 0, cost_estimate: 0.0, provider: :anthropic, resolved_assets: []})
@@ -1146,6 +1150,8 @@ defmodule NsparkWeb.StudioLive do
     |> assign(:flow_nodes, to_flow_nodes(nodes, node_diagnostics, var_node_ids, node_order, parallel_ids))
     |> assign(:flow_edges, to_flow_edges(edges) ++ control_edges(nodes))
     |> assign(:control_mode, control_mode(nodes))
+    |> assign(:promptbasic_export, promptbasic_export(nodes))
+    |> assign(:compiled_program, compiled_program(nodes))
     |> assign(:edge_count, length(edges))
     |> assign(:variables, variables_in(resolved_nodes))
     |> assign(:compiled, compiled)
@@ -1611,6 +1617,29 @@ defmodule NsparkWeb.StudioLive do
       %{kind: to_string(Nspark.PromptBasic.IR.mode(ir)), states: length(Nspark.PromptBasic.IR.states(ir))}
     else
       nil
+    end
+  end
+
+  # Format-first export (Phase 5): the ready-to-paste PromptBasic deliverable
+  # (execution contract + rendered program). Empty unless there's a control layer.
+  defp promptbasic_export(nodes) do
+    if Enum.any?(nodes, &(&1.type in [:rule, :state])) do
+      Nspark.PromptBasic.Export.render(nodes)
+    else
+      ""
+    end
+  end
+
+  # The rendered PromptBasic program (no contract boilerplate) shown in the Live
+  # Compiler panel for control-layer graphs. The markdown compiler only assembles
+  # the *context* layer; for a rule/state graph the program is the faithful
+  # compiled artifact — so the panel resembles the canvas instead of showing a
+  # handful of orphaned tool/memory lines.
+  defp compiled_program(nodes) do
+    if Enum.any?(nodes, &(&1.type in [:rule, :state])) do
+      Nspark.PromptBasic.Export.program(nodes)
+    else
+      ""
     end
   end
 
@@ -2311,21 +2340,39 @@ defmodule NsparkWeb.StudioLive do
                   >
                     Copy
                   </button>
+                  <button
+                    :if={@control_mode}
+                    id="copy-promptbasic"
+                    type="button"
+                    phx-hook="CopyToClipboard"
+                    data-content={@promptbasic_export}
+                    class="compiler-ctrl-btn"
+                    title="Copy the PromptBasic program + execution contract (ready to paste into any LLM)"
+                  >
+                    Copy PromptBasic
+                  </button>
                   <span class="compiler-live"><i></i>LIVE</span>
                 </div>
               </div>
-              <div class="compiler-stats">
+              <div :if={!@control_mode} class="compiler-stats">
                 ≈ {@compiled.token_estimate} tokens<span :if={@compiled.cost_estimate > 0}> · ~{format_cost(@compiled.cost_estimate)}</span> · {@compiled.included} nodes<span :if={@compiled.excluded > 0}> · {@compiled.excluded} muted</span><span :if={@compiled.resolved_assets != []} title={resolved_assets_title(@compiled.resolved_assets)}> · {length(@compiled.resolved_assets)} linked skill{if length(@compiled.resolved_assets) > 1, do: "s"}</span>
               </div>
+              <div :if={@control_mode} class="compiler-stats">
+                PromptBasic · ≈ {div(String.length(@compiled_program), 4)} tokens · {@control_mode.states} state{if @control_mode.states != 1, do: "s"}
+              </div>
               <div class="compiler-body">
-                <%= if @compiled_html == "" do %>
-                  <div class="compiler-empty">Nothing to compile yet.</div>
-                <% else %>
-                  <%= if @compiler_view == :rendered do %>
+                <%= cond do %>
+                  <% @control_mode -> %>
+                    <%!-- Control-layer graph: the PromptBasic program is the faithful
+                         compiled artifact (the markdown compiler only assembles the
+                         context layer, which a rule/state graph mostly lacks). --%>
+                    <pre class="compiler-raw">{@compiled_program}</pre>
+                  <% @compiled_html == "" -> %>
+                    <div class="compiler-empty">Nothing to compile yet.</div>
+                  <% @compiler_view == :rendered -> %>
                     <div class="compiler-md">{raw(@compiled_html)}</div>
-                  <% else %>
+                  <% true -> %>
                     <pre class="compiler-raw">{@compiled.markdown}</pre>
-                  <% end %>
                 <% end %>
               </div>
             </div>
